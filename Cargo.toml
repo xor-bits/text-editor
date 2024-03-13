@@ -1,0 +1,9 @@
+[package]
+name = "text-editor"
+version = "0.1.0"
+edition = "2021"
+description = "a cli text editor"
+
+[dependencies]
+crossterm = "0.27"
+clap = { version = "4.5", features = ["derive"] }
