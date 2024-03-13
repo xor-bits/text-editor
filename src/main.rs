@@ -27,7 +27,7 @@ fn main() {
     let a = AlternativeScreenGuard::enter();
 
     // println!("{args:?}");
-    let buffer = fs::read_to_string(args.file)
+    let mut buffer = fs::read_to_string(args.file)
         .unwrap()
         .split('\n')
         .map(ToString::to_string)
@@ -117,6 +117,20 @@ fn main() {
                 kind: KeyEventKind::Press,
                 ..
             }) => cursor_delta.0 += i16::MAX,
+            Event::Key(KeyEvent {
+                code: KeyCode::Backspace,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) => {
+                if cursor.0 != 0 {
+                    if let Some(line) = buffer.get_mut(cursor.1 as usize + view_line) {
+                        cursor.0 -= 1;
+                        line.remove(cursor.0 as usize);
+                        redraw_line(&buffer[view_line..], cursor.1, size);
+                    }
+                }
+            }
             _ => {}
         }
 
@@ -191,6 +205,18 @@ fn redraw(buffer: &[String], size: (u16, u16)) {
             print!("\n\r");
         }
         first = false;
+        print!("{line}");
+    }
+}
+
+fn redraw_line(buffer: &[String], line: u16, size: (u16, u16)) {
+    queue!(stdout(), MoveLeft(u16::MAX), MoveUp(u16::MAX),).unwrap();
+    if line != 0 {
+        queue!(stdout(), MoveDown(line)).unwrap();
+    }
+    queue!(stdout(), Clear(ClearType::CurrentLine)).unwrap();
+    if let Some(line) = buffer.iter().take(size.1 as usize).nth(line as usize) {
+        let line = line.get(..size.0 as usize).unwrap_or(line);
         print!("{line}");
     }
 }
