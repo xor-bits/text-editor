@@ -131,6 +131,20 @@ fn main() {
                     }
                 }
             }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char(ch),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) => {
+                if cursor.0 != 0 {
+                    if let Some(line) = buffer.get_mut(cursor.1 as usize + view_line) {
+                        line.insert(cursor.0 as usize, ch);
+                        cursor.0 += 1;
+                        redraw_line(&buffer[view_line..], cursor.1, size);
+                    }
+                }
+            }
             _ => {}
         }
 
@@ -156,25 +170,6 @@ fn main() {
         if view_old != view_line {
             redraw(&buffer[view_line..], size);
         }
-
-        // if cursor.1 == 0 {
-        //     if view_line != 0 {
-        //         view_line -= 1;
-        //         redraw(&buffer[view_line..], size);
-        //     }
-        // } else {
-        //     cursor.1 -= 1;
-        // }
-
-        // println!("{ev:?}");
-        // match ev {
-        //     Event::FocusGained => todo!(),
-        //     Event::FocusLost => todo!(),
-        //     Event::Key(_) => todo!(),
-        //     Event::Mouse(_) => todo!(),
-        //     Event::Paste(_) => todo!(),
-        //     Event::Resize(_, _) => todo!(),
-        // }
 
         // println!("{cursor:?}");
         queue!(stdout(), MoveUp(u16::MAX), MoveLeft(u16::MAX)).unwrap();
