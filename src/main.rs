@@ -2,7 +2,7 @@ use std::{fs, io::stdout, thread, time::Duration};
 
 use clap::Parser;
 use crossterm::{
-    cursor::{self, MoveDown, MoveLeft, MoveRight, MoveUp},
+    cursor::{self, MoveDown, MoveLeft, MoveRight, MoveUp, SetCursorStyle},
     event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute, queue,
     terminal::{
@@ -17,6 +17,49 @@ use crossterm::{
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     file: String,
+}
+
+//
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Normal,
+    Insert { append: bool },
+    Command,
+}
+
+impl Mode {
+    pub const fn cursor_style(&self) -> SetCursorStyle {
+        match self {
+            Mode::Normal => SetCursorStyle::SteadyBlock,
+            Mode::Insert { .. } => SetCursorStyle::SteadyBar,
+            Mode::Command => SetCursorStyle::SteadyBar,
+        }
+    }
+
+    /// Returns `true` if the mode is [`Normal`].
+    ///
+    /// [`Normal`]: Mode::Normal
+    #[must_use]
+    pub fn is_normal(&self) -> bool {
+        matches!(self, Self::Normal)
+    }
+
+    /// Returns `true` if the mode is [`Insert`].
+    ///
+    /// [`Insert`]: Mode::Insert
+    #[must_use]
+    pub fn is_insert(&self) -> bool {
+        matches!(self, Self::Insert { .. })
+    }
+
+    /// Returns `true` if the mode is [`Command`].
+    ///
+    /// [`Command`]: Mode::Command
+    #[must_use]
+    pub fn is_command(&self) -> bool {
+        matches!(self, Self::Command)
+    }
 }
 
 //
@@ -36,13 +79,23 @@ fn main() {
     let mut size = terminal::size().unwrap();
     let mut cursor = (0u16, 0u16);
     let mut view_line = 0usize;
+    let mut mode = Mode::Normal;
+    // let mut command = String::new();
 
     redraw(&buffer[view_line..], size);
-    execute!(stdout(), MoveLeft(u16::MAX), MoveUp(u16::MAX)).unwrap();
+    execute!(
+        stdout(),
+        MoveLeft(u16::MAX),
+        MoveUp(u16::MAX),
+        mode.cursor_style()
+    )
+    .unwrap();
 
     loop {
         let ev = crossterm::event::read().unwrap();
         let mut cursor_delta = (0i16, 0i16);
+
+        // println!("{ev:?}");
 
         match ev {
             Event::Key(KeyEvent {
@@ -50,13 +103,18 @@ fn main() {
                 modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
-            })
-            | Event::Key(KeyEvent {
+            }) => break,
+            Event::Key(KeyEvent {
                 code: KeyCode::Esc,
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            }) => break,
+            }) => {
+                if let Mode::Insert { append: true } = mode {
+                    cursor_delta.0 -= 1;
+                }
+                mode = Mode::Normal
+            }
             Event::Resize(w, h) => {
                 size = (w, h);
                 redraw(&buffer[view_line..], size);
@@ -118,11 +176,50 @@ fn main() {
                 ..
             }) => cursor_delta.0 += i16::MAX,
             Event::Key(KeyEvent {
+                code: KeyCode::Char('i'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if mode.is_normal() => mode = Mode::Insert { append: false },
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('I'),
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                ..
+            }) if mode.is_normal() => {
+                mode = Mode::Insert { append: false };
+                cursor_delta.0 -= i16::MAX;
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('a'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if mode.is_normal() => {
+                mode = Mode::Insert { append: true };
+                cursor_delta.0 += 1;
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('A'),
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                ..
+            }) if mode.is_normal() => {
+                mode = Mode::Insert { append: true };
+                cursor_delta.0 += i16::MAX;
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char(':'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if mode.is_normal() => mode = Mode::Command,
+            Event::Key(KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            }) => {
+            }) if mode.is_insert() => {
                 if cursor.0 != 0 {
                     if let Some(line) = buffer.get_mut(cursor.1 as usize + view_line) {
                         cursor.0 -= 1;
@@ -136,7 +233,7 @@ fn main() {
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            }) => {
+            }) if mode.is_insert() => {
                 if cursor.0 != 0 {
                     if let Some(line) = buffer.get_mut(cursor.1 as usize + view_line) {
                         line.insert(cursor.0 as usize, ch);
@@ -179,7 +276,7 @@ fn main() {
         if cursor.0 != 0 {
             queue!(stdout(), MoveRight(cursor.0)).unwrap();
         }
-        execute!(stdout()).unwrap();
+        execute!(stdout(), mode.cursor_style()).unwrap();
     }
 
     _ = a;
