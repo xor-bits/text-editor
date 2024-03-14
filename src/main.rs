@@ -1,8 +1,8 @@
-use std::{fs, io::stdout, thread, time::Duration};
+use std::{fs, io::stdout};
 
 use clap::Parser;
 use crossterm::{
-    cursor::{self, MoveDown, MoveLeft, MoveRight, MoveUp, SetCursorStyle},
+    cursor::{MoveDown, MoveLeft, MoveRight, MoveUp, SetCursorStyle},
     event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute, queue,
     style::{Color, SetBackgroundColor},
@@ -248,12 +248,10 @@ fn main() {
                 kind: KeyEventKind::Press,
                 ..
             }) if mode.is_insert() => {
-                if cursor.0 != 0 {
-                    if let Some(line) = buffer.get_mut(cursor.1 as usize + view_line) {
-                        line.insert(cursor.0 as usize, ch);
-                        cursor.0 += 1;
-                        redraw_line(&buffer[view_line..], cursor.1, size);
-                    }
+                if let Some(line) = buffer.get_mut(cursor.1 as usize + view_line) {
+                    line.insert(cursor.0 as usize, ch);
+                    cursor.0 += 1;
+                    redraw_line(&buffer[view_line..], cursor.1, size);
                 }
             }
             Event::Key(KeyEvent {
