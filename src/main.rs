@@ -236,10 +236,24 @@ fn main() {
             }) if mode.is_insert() => {
                 if cursor.0 != 0 {
                     if let Some(line) = buffer.get_mut(cursor.1 as usize + view_line) {
-                        cursor.0 -= 1;
-                        line.remove(cursor.0 as usize);
+                        cursor_delta.0 -= 1;
+                        if cursor.0 as usize == line.len() {
+                            line.pop();
+                        } else {
+                            line.remove(cursor.0 as usize - 1);
+                        }
                         redraw_line(&buffer[view_line..], cursor.1, size);
                     }
+                } else if cursor.1 != 0 {
+                    let removed = buffer.remove(cursor.1 as usize + view_line);
+                    let prev = buffer.get_mut(cursor.1 as usize + view_line - 1).unwrap();
+
+                    // FIXME: handle cursor moving immediately instead of using the delayed cursor_delta
+                    cursor.1 = cursor.1.saturating_sub(1);
+                    cursor.0 = prev.len().min(u16::MAX as usize).min(size.0 as usize - 1) as u16;
+                    prev.push_str(&removed);
+
+                    redraw(&buffer[view_line..], size, mode, Some(&args.file));
                 }
             }
             Event::Key(KeyEvent {
@@ -250,9 +264,24 @@ fn main() {
             }) if mode.is_insert() => {
                 if let Some(line) = buffer.get_mut(cursor.1 as usize + view_line) {
                     line.insert(cursor.0 as usize, ch);
-                    cursor.0 += 1;
+                    cursor_delta.0 += 1;
                     redraw_line(&buffer[view_line..], cursor.1, size);
                 }
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if mode.is_insert() => {
+                let next = buffer
+                    .get_mut(cursor.1 as usize + view_line)
+                    .unwrap()
+                    .split_off(cursor.0 as usize);
+                buffer.insert(cursor.1 as usize + view_line + 1, next);
+                cursor.1 += 1;
+                cursor.0 = 0;
+                redraw(&buffer[view_line..], size, mode, Some(&args.file));
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Backspace,
@@ -318,14 +347,7 @@ fn main() {
         cursor.0 = cursor.0.saturating_add_signed(cursor_delta.0);
         cursor.1 = cursor.1.saturating_add_signed(cursor_delta.1);
 
-        cursor.0 = buffer
-            .get(cursor.1 as usize + view_line)
-            .map_or(0, |line| line.len().min(u16::MAX as usize) as u16)
-            .min(cursor.0)
-            .min(size.0 - 1) as _;
         cursor.1 = cursor.1.min(size.1 - 3);
-
-        cursor_delta.0 += old_cursor.0 as i16 - cursor.0 as i16;
         cursor_delta.1 += old_cursor.1 as i16 - cursor.1 as i16;
         // println!("{cursor_delta:?}");
 
@@ -336,6 +358,14 @@ fn main() {
         if view_old != view_line {
             redraw(&buffer[view_line..], size, mode, Some(&args.file));
         }
+
+        cursor.0 = buffer
+            .get(cursor.1 as usize + view_line)
+            .map_or(0, |line| line.len().min(u16::MAX as usize) as u16)
+            .min(cursor.0)
+            .min(size.0 - 1) as _;
+
+        cursor_delta.0 += old_cursor.0 as i16 - cursor.0 as i16;
 
         queue!(
             stdout(),
@@ -413,6 +443,11 @@ struct AlternativeScreenGuard(());
 
 impl AlternativeScreenGuard {
     pub fn enter() -> Self {
+        std::panic::set_hook(Box::new(move |i| {
+            execute!(stdout(), LeaveAlternateScreen).unwrap();
+            disable_raw_mode().unwrap();
+            eprintln!("{i}");
+        }));
         enable_raw_mode().unwrap();
         execute!(stdout(), EnterAlternateScreen).unwrap();
         Self(())
