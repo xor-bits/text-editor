@@ -1,8 +1,14 @@
-use std::{fs, io::stdout};
+use std::{
+    borrow::Cow,
+    fs,
+    io::{self, stdout, Seek},
+    path::{Path, PathBuf},
+};
 
+use self::{args::Args, mode::Mode};
 use clap::Parser;
 use crossterm::{
-    cursor::{MoveDown, MoveLeft, MoveRight, MoveUp, SetCursorStyle},
+    cursor::{MoveDown, MoveLeft, MoveRight, MoveUp},
     event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute, queue,
     style::{Color, SetBackgroundColor},
@@ -11,87 +17,145 @@ use crossterm::{
         LeaveAlternateScreen,
     },
 };
+use ropey::Rope;
 
 //
 
-#[derive(Debug, Parser)]
-#[command(author, version, about, long_about = None)]
-pub struct Args {
-    file: String,
-}
+mod args;
+mod mode;
 
 //
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Normal,
-    Insert { append: bool },
-    Command,
+pub struct Buffer {
+    contents: Rope,
+    lossy_name: Cow<'static, str>,
+    /// where the buffer is stored, if it even is
+    inner: BufferInner,
 }
 
-impl Mode {
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Mode::Normal => "NOR",
-            Mode::Insert { .. } => "INS",
-            Mode::Command => "CMD",
+pub enum BufferInner {
+    File { inner: fs::File, readonly: bool },
+    NewFile { inner: PathBuf },
+    Scratch,
+}
+
+impl Buffer {
+    pub fn new() -> Self {
+        Self {
+            contents: Rope::new(),
+            lossy_name: Cow::Borrowed("[scratch]"),
+            inner: BufferInner::Scratch,
         }
     }
 
-    pub const fn cursor_style(&self) -> SetCursorStyle {
-        match self {
-            Mode::Normal => SetCursorStyle::SteadyBlock,
-            Mode::Insert { .. } => SetCursorStyle::SteadyBar,
-            Mode::Command => SetCursorStyle::SteadyBar,
-        }
+    pub fn open(path: &Path) -> io::Result<Self> {
+        let lossy_name = path.to_string_lossy().to_string().into();
+
+        // first try opening in RW mode
+        match fs::OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(false)
+            .open(path)
+        {
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(other) => return Err(other),
+            Ok(file) => {
+                return Ok(Self {
+                    contents: Rope::from_reader(&file)?,
+                    lossy_name,
+                    inner: BufferInner::File {
+                        inner: file,
+                        readonly: false,
+                    },
+                })
+            }
+        };
+
+        // then try opening it in readonly mode
+        match fs::OpenOptions::new()
+            .write(false)
+            .read(true)
+            .create(false)
+            .open(path)
+        {
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(other) => return Err(other),
+            Ok(file) => {
+                return Ok(Self {
+                    contents: Rope::from_reader(&file)?,
+                    lossy_name,
+                    inner: BufferInner::File {
+                        inner: file,
+                        readonly: true,
+                    },
+                })
+            }
+        };
+
+        // finally open it as a new file, without creating the file yet
+        Ok(Self {
+            contents: Rope::new(),
+            lossy_name,
+            inner: BufferInner::NewFile { inner: path.into() },
+        })
     }
 
-    /// Returns `true` if the mode is [`Normal`].
-    ///
-    /// [`Normal`]: Mode::Normal
-    #[must_use]
-    pub fn is_normal(&self) -> bool {
-        matches!(self, Self::Normal)
-    }
+    fn write(&mut self) -> io::Result<()> {
+        match self.inner {
+            BufferInner::File {
+                ref mut inner,
+                readonly,
+            } => {
+                if readonly {
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, "readonly"));
+                }
 
-    /// Returns `true` if the mode is [`Insert`].
-    ///
-    /// [`Insert`]: Mode::Insert
-    #[must_use]
-    pub fn is_insert(&self) -> bool {
-        matches!(self, Self::Insert { .. })
-    }
+                inner.seek(io::SeekFrom::Start(0))?;
 
-    /// Returns `true` if the mode is [`Command`].
-    ///
-    /// [`Command`]: Mode::Command
-    #[must_use]
-    pub fn is_command(&self) -> bool {
-        matches!(self, Self::Command)
+                self.contents.write_to(inner)?;
+            }
+            BufferInner::NewFile { ref inner } => {
+                let new_file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(inner)?;
+
+                self.contents.write_to(new_file)?;
+            }
+            BufferInner::Scratch => {}
+        };
+
+        Ok(())
+    }
+}
+
+impl Default for Buffer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 //
 
 fn main() {
-    let args = Args::parse();
+    let args: Args = Args::parse();
 
     let a = AlternativeScreenGuard::enter();
 
-    // println!("{args:?}");
-    let mut buffer = fs::read_to_string(args.file.as_str())
-        .unwrap()
-        .split('\n')
-        .map(ToString::to_string)
-        .collect::<Vec<String>>();
+    let mut buffer = args
+        .file
+        .map(|filename| Buffer::open(filename.as_str().as_ref()))
+        .unwrap_or_else(|| Ok(Buffer::new()))
+        .expect("FIXME: failed to open a file");
 
     let mut size = terminal::size().unwrap();
-    let mut cursor = (0u16, 0u16);
+    let mut cursor = 0usize;
     let mut view_line = 0usize;
     let mut mode = Mode::Normal;
     let mut command = String::new();
 
-    redraw(&buffer[view_line..], size, mode, Some(&args.file));
+    redraw(&buffer, size, mode, view_line);
     execute!(
         stdout(),
         MoveLeft(u16::MAX),
@@ -100,14 +164,54 @@ fn main() {
     )
     .unwrap();
 
+    // let mut old_mode = None;
+
     loop {
-        let ev = crossterm::event::read().unwrap();
-        let mut cursor_delta = (0i16, 0i16);
-        let old_mode = mode;
+        let row = buffer.contents.char_to_line(cursor);
+        let col = cursor - buffer.contents.line_to_char(row);
 
-        // println!("{ev:?}");
+        // keep the cursor within view
+        let view_old = view_line;
+        if row < view_line {
+            view_line = row;
+        }
+        if row + 3 > view_line + size.1 as usize {
+            view_line = row + 3 - size.1 as usize;
+        }
+        if view_old != view_line {
+            redraw(&buffer, size, mode, view_line);
+        }
 
-        match ev {
+        // if Some(mode) != old_mode {
+        redraw_footer(size, mode, &buffer.lossy_name, row, col);
+        // }
+        // old_mode = Some(mode);
+
+        let screen_row = (row - view_line).min(size.1 as usize) as u16;
+        let screen_col = col.min(size.0 as usize) as u16;
+
+        queue!(
+            stdout(),
+            MoveDown(u16::MAX),
+            MoveLeft(u16::MAX),
+            Clear(ClearType::CurrentLine)
+        )
+        .unwrap();
+        print!("{command}");
+        execute!(stdout(), mode.cursor_style()).unwrap();
+        if !mode.is_command() {
+            // println!("{cursor:?}");
+            queue!(stdout(), MoveUp(u16::MAX), MoveLeft(u16::MAX)).unwrap();
+            if screen_row != 0 {
+                queue!(stdout(), MoveDown(screen_row)).unwrap();
+            }
+            if screen_col != 0 {
+                queue!(stdout(), MoveRight(screen_col)).unwrap();
+            }
+            execute!(stdout(), mode.cursor_style()).unwrap();
+        }
+
+        match crossterm::event::read().unwrap() {
             Event::Key(KeyEvent {
                 code: KeyCode::Char('c'),
                 modifiers: KeyModifiers::CONTROL,
@@ -121,13 +225,14 @@ fn main() {
                 ..
             }) => {
                 if let Mode::Insert { append: true } = mode {
-                    cursor_delta.0 -= 1;
+                    cursor -= 1;
                 }
-                mode = Mode::Normal
+                mode = Mode::Normal;
+                command.clear();
             }
             Event::Resize(w, h) => {
                 size = (w, h);
-                redraw(&buffer[view_line..], size, mode, Some(&args.file));
+                redraw(&buffer, size, mode, view_line);
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Tab,
@@ -135,56 +240,82 @@ fn main() {
                 kind: KeyEventKind::Press,
                 ..
             }) => {
-                redraw(&buffer[view_line..], size, mode, Some(&args.file));
+                redraw(&buffer, size, mode, view_line);
             }
-            Event::Key(KeyEvent {
-                code: KeyCode::Up,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) if !mode.is_command() => cursor_delta.1 -= 1,
-            Event::Key(KeyEvent {
-                code: KeyCode::Down,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) if !mode.is_command() => cursor_delta.1 += 1,
             Event::Key(KeyEvent {
                 code: KeyCode::Left,
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            }) if !mode.is_command() => cursor_delta.0 -= 1,
+            }) if !mode.is_command() => jump_cursor(&buffer, &mut cursor, -1, 0),
+            Event::Key(KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if !mode.is_command() => jump_cursor(&buffer, &mut cursor, 0, 1),
+            Event::Key(KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if !mode.is_command() => jump_cursor(&buffer, &mut cursor, 0, -1),
             Event::Key(KeyEvent {
                 code: KeyCode::Right,
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            }) if !mode.is_command() => cursor_delta.0 += 1,
+            }) if !mode.is_command() => jump_cursor(&buffer, &mut cursor, 1, 0),
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if mode.is_normal() => jump_cursor(&buffer, &mut cursor, -1, 0),
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if mode.is_normal() => jump_cursor(&buffer, &mut cursor, 0, 1),
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if mode.is_normal() => jump_cursor(&buffer, &mut cursor, 0, -1),
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if mode.is_normal() => jump_cursor(&buffer, &mut cursor, 1, 0),
             Event::Key(KeyEvent {
                 code: KeyCode::PageUp,
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            }) if !mode.is_command() => cursor_delta.1 -= size.1 as i16 - 1,
+            }) if !mode.is_command() => {
+                jump_cursor(&buffer, &mut cursor, 0, -(size.1 as isize - 1))
+            }
             Event::Key(KeyEvent {
                 code: KeyCode::PageDown,
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            }) if !mode.is_command() => cursor_delta.1 += size.1 as i16 - 3,
+            }) if !mode.is_command() => jump_cursor(&buffer, &mut cursor, 0, size.1 as isize - 3),
             Event::Key(KeyEvent {
                 code: KeyCode::Home,
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            }) if !mode.is_command() => cursor_delta.0 -= i16::MAX,
+            }) if !mode.is_command() => jump_line_beg(&buffer, &mut cursor),
             Event::Key(KeyEvent {
                 code: KeyCode::End,
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            }) if !mode.is_command() => cursor_delta.0 += i16::MAX,
+            }) if !mode.is_command() => jump_line_end(&buffer, &mut cursor),
             Event::Key(KeyEvent {
                 code: KeyCode::Char('i'),
                 modifiers: KeyModifiers::NONE,
@@ -198,7 +329,7 @@ fn main() {
                 ..
             }) if mode.is_normal() => {
                 mode = Mode::Insert { append: false };
-                cursor_delta.0 -= i16::MAX;
+                jump_line_beg(&buffer, &mut cursor);
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Char('a'),
@@ -207,7 +338,7 @@ fn main() {
                 ..
             }) if mode.is_normal() => {
                 mode = Mode::Insert { append: true };
-                cursor_delta.0 += 1;
+                jump_cursor(&buffer, &mut cursor, 1, 0);
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Char('A'),
@@ -216,7 +347,7 @@ fn main() {
                 ..
             }) if mode.is_normal() => {
                 mode = Mode::Insert { append: true };
-                cursor_delta.0 += i16::MAX;
+                jump_line_end(&buffer, &mut cursor);
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Char(':'),
@@ -234,39 +365,22 @@ fn main() {
                 kind: KeyEventKind::Press,
                 ..
             }) if mode.is_insert() => {
-                if cursor.0 != 0 {
-                    if let Some(line) = buffer.get_mut(cursor.1 as usize + view_line) {
-                        cursor_delta.0 -= 1;
-                        if cursor.0 as usize == line.len() {
-                            line.pop();
-                        } else {
-                            line.remove(cursor.0 as usize - 1);
-                        }
-                        redraw_line(&buffer[view_line..], cursor.1, size);
-                    }
-                } else if cursor.1 != 0 {
-                    let removed = buffer.remove(cursor.1 as usize + view_line);
-                    let prev = buffer.get_mut(cursor.1 as usize + view_line - 1).unwrap();
-
-                    // FIXME: handle cursor moving immediately instead of using the delayed cursor_delta
-                    cursor.1 = cursor.1.saturating_sub(1);
-                    cursor.0 = prev.len().min(u16::MAX as usize).min(size.0 as usize - 1) as u16;
-                    prev.push_str(&removed);
-
-                    redraw(&buffer[view_line..], size, mode, Some(&args.file));
+                if cursor == 0 {
+                    continue;
                 }
+
+                buffer.contents.remove(cursor - 1..cursor);
+                jump_cursor(&buffer, &mut cursor, -1, 0);
+                redraw(&buffer, size, mode, view_line);
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Char(ch),
-                modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
             }) if mode.is_insert() => {
-                if let Some(line) = buffer.get_mut(cursor.1 as usize + view_line) {
-                    line.insert(cursor.0 as usize, ch);
-                    cursor_delta.0 += 1;
-                    redraw_line(&buffer[view_line..], cursor.1, size);
-                }
+                buffer.contents.insert_char(cursor, ch);
+                jump_cursor(&buffer, &mut cursor, 1, 0);
+                redraw(&buffer, size, mode, view_line);
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Enter,
@@ -274,14 +388,9 @@ fn main() {
                 kind: KeyEventKind::Press,
                 ..
             }) if mode.is_insert() => {
-                let next = buffer
-                    .get_mut(cursor.1 as usize + view_line)
-                    .unwrap()
-                    .split_off(cursor.0 as usize);
-                buffer.insert(cursor.1 as usize + view_line + 1, next);
-                cursor.1 += 1;
-                cursor.0 = 0;
-                redraw(&buffer[view_line..], size, mode, Some(&args.file));
+                buffer.contents.insert_char(cursor, '\n');
+                jump_cursor(&buffer, &mut cursor, 1, 0);
+                redraw(&buffer, size, mode, view_line);
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Backspace,
@@ -303,7 +412,6 @@ fn main() {
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Char(ch),
-                modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
             }) if mode.is_command() => command.push(ch),
@@ -324,75 +432,84 @@ fn main() {
                 match command.as_str() {
                     ":q" | ":q!" => return,
                     ":wq" | ":x" => {
-                        fs::write(&args.file, buffer.join("\n")).unwrap();
+                        buffer.write().unwrap();
+                        // fs::write(&args.file, buffer.join("\n")).unwrap();
                         return;
                     }
                     ":w" => {
-                        fs::write(&args.file, buffer.join("\n")).unwrap();
+                        // fs::write(&args.file, buffer.join("\n")).unwrap();
                     }
                     _ => {
-                        command.clear();
                         command.push_str("invalid command");
                     }
                 }
+                command.clear();
             }
             _ => {}
-        }
-
-        if mode != old_mode {
-            redraw_footer(size, mode, Some(&args.file));
-        }
-
-        let old_cursor = cursor;
-        cursor.0 = cursor.0.saturating_add_signed(cursor_delta.0);
-        cursor.1 = cursor.1.saturating_add_signed(cursor_delta.1);
-
-        cursor.1 = cursor.1.min(size.1 - 3);
-        cursor_delta.1 += old_cursor.1 as i16 - cursor.1 as i16;
-        // println!("{cursor_delta:?}");
-
-        let view_old = view_line;
-        view_line = view_line
-            .saturating_add_signed(cursor_delta.1 as isize)
-            .min(buffer.len().saturating_sub(size.1 as usize - 2));
-        if view_old != view_line {
-            redraw(&buffer[view_line..], size, mode, Some(&args.file));
-        }
-
-        cursor.0 = buffer
-            .get(cursor.1 as usize + view_line)
-            .map_or(0, |line| line.len().min(u16::MAX as usize) as u16)
-            .min(cursor.0)
-            .min(size.0 - 1) as _;
-
-        cursor_delta.0 += old_cursor.0 as i16 - cursor.0 as i16;
-
-        queue!(
-            stdout(),
-            MoveDown(u16::MAX),
-            MoveLeft(u16::MAX),
-            Clear(ClearType::CurrentLine)
-        )
-        .unwrap();
-        print!("{}", command);
-        execute!(stdout(), mode.cursor_style()).unwrap();
-        if !mode.is_command() {
-            // println!("{cursor:?}");
-            queue!(stdout(), MoveUp(u16::MAX), MoveLeft(u16::MAX)).unwrap();
-            if cursor.1 != 0 {
-                queue!(stdout(), MoveDown(cursor.1)).unwrap();
-            }
-            if cursor.0 != 0 {
-                queue!(stdout(), MoveRight(cursor.0)).unwrap();
-            }
-            execute!(stdout(), mode.cursor_style()).unwrap();
         }
     }
 
     _ = a;
 }
 
-fn redraw(buffer: &[String], size: (u16, u16), mode: Mode, file: Option<&str>) {
+fn jump_cursor(buffer: &Buffer, cursor: &mut usize, delta_x: isize, delta_y: isize) {
+    if buffer.contents.len_chars() == 0 {
+        // cant move if the buffer has nothing
+        *cursor = 0;
+        return;
+    }
+
+    if delta_x != 0 {
+        // delta X can wrap
+        *cursor = (*cursor)
+            .saturating_add_signed(delta_x)
+            .min(buffer.contents.len_chars() - 1);
+    }
+
+    // delta Y from now on
+    if delta_y == 0 || buffer.contents.len_lines() == 0 {
+        return;
+    }
+
+    // figure out what X position the cursor is moved to
+    let cursor_line = buffer.contents.char_to_line(*cursor);
+    let line_start = buffer.contents.line_to_char(cursor_line);
+    let cursor_x = *cursor - line_start;
+
+    let target_line = cursor_line
+        .saturating_add_signed(delta_y)
+        .min(buffer.contents.len_lines() - 1);
+    let target_line_len = buffer.contents.line(target_line).len_chars();
+
+    // place the cursor on the same X position or on the last char on the line
+    let target_line_start = buffer.contents.line_to_char(target_line);
+    *cursor = target_line_start + target_line_len.min(cursor_x);
+}
+
+fn jump_line_beg(buffer: &Buffer, cursor: &mut usize) {
+    *cursor = buffer
+        .contents
+        .line_to_char(buffer.contents.char_to_line(*cursor));
+}
+
+fn jump_line_end(buffer: &Buffer, cursor: &mut usize) {
+    let line = buffer.contents.char_to_line(*cursor);
+    let line_len = buffer.contents.line(line).len_chars().saturating_sub(1);
+    *cursor = buffer
+        .contents
+        .len_chars()
+        .min(buffer.contents.line_to_char(line) + line_len);
+}
+
+// fn jump_beg(_buffer: &Buffer, cursor: &mut usize) {
+//     *cursor = 0;
+// }
+
+// fn jump_end(buffer: &Buffer, cursor: &mut usize) {
+//     *cursor = buffer.contents.len_chars().saturating_sub(1);
+// }
+
+fn redraw(buffer: &Buffer, size: (u16, u16), mode: Mode, line: usize) {
     queue!(
         stdout(),
         MoveLeft(u16::MAX),
@@ -400,16 +517,22 @@ fn redraw(buffer: &[String], size: (u16, u16), mode: Mode, file: Option<&str>) {
         Clear(ClearType::All)
     )
     .unwrap();
-    for line in buffer.iter().take(size.1 as usize - 2) {
-        let line = line.get(..size.0 as usize).unwrap_or(line);
-        print!("{line}\r\n");
+    for line in buffer
+        .contents
+        .get_lines_at(line)
+        .into_iter()
+        .flatten()
+        .take(size.1 as usize - 2)
+    {
+        let line = line.get_slice(..size.0 as usize).unwrap_or(line);
+        print!("{line}\r");
     }
 
-    redraw_footer_at(mode, file);
+    // redraw_footer_at(mode, &buffer.lossy_name);
 }
 
-fn redraw_footer(size: (u16, u16), mode: Mode, file: Option<&str>) {
-    queue!(stdout(), MoveLeft(u16::MAX), MoveUp(u16::MAX),).unwrap();
+fn redraw_footer(size: (u16, u16), mode: Mode, file: &str, row: usize, col: usize) {
+    queue!(stdout(), MoveLeft(u16::MAX), MoveUp(u16::MAX)).unwrap();
     if size.1 - 2 != 0 {
         queue!(
             stdout(),
@@ -418,12 +541,12 @@ fn redraw_footer(size: (u16, u16), mode: Mode, file: Option<&str>) {
         )
         .unwrap();
     }
-    redraw_footer_at(mode, file);
+    redraw_footer_at(mode, file, row, col);
 }
 
-fn redraw_footer_at(mode: Mode, file: Option<&str>) {
+fn redraw_footer_at(mode: Mode, file: &str, row: usize, col: usize) {
     queue!(stdout(), SetBackgroundColor(Color::Black)).unwrap();
-    println!(" {} {}", mode.as_str(), file.unwrap_or("[scratch]"));
+    println!(" {} {}", mode.as_str(), file);
     execute!(stdout(), SetBackgroundColor(Color::Reset)).unwrap();
 }
 
