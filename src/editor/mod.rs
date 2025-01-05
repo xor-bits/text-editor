@@ -494,11 +494,10 @@ impl Editor {
                     ":q" | ":q!" => self.should_close = true,
                     ":wq" | ":x" => {
                         self.buffer.write().unwrap();
-                        // fs::write(&args.file, buffer.join("\n")).unwrap();
                         self.should_close = true;
                     }
                     ":w" => {
-                        // fs::write(&args.file, buffer.join("\n")).unwrap();
+                        self.buffer.write().unwrap();
                     }
                     _ => {
                         self.command.push_str("invalid command");
