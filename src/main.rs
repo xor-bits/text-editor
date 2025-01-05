@@ -1,55 +1,43 @@
 use std::io::stdout;
 
-use self::{args::Args, buffer::Buffer, mode::Mode};
+use self::{args::Args, buffer::Buffer, editor::Editor, mode::Mode};
 use clap::Parser;
 use crossterm::{
     cursor::{MoveDown, MoveLeft, MoveRight, MoveUp},
-    event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute, queue,
     style::{Color, SetBackgroundColor},
-    terminal::{
-        self, disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen,
-        LeaveAlternateScreen,
-    },
+    terminal::{Clear, ClearType},
+};
+use ratatui::{
+    layout::{Constraint, Layout},
+    widgets::Block,
 };
 
 //
 
 mod args;
 mod buffer;
+mod editor;
 mod mode;
-
-//
 
 //
 
 fn main() {
     let args: Args = Args::parse();
 
-    let a = AlternativeScreenGuard::enter();
+    let (_guard, terminal) = AlternativeScreenGuard::enter();
 
-    let mut buffer = args
+    let buffer = args
         .file
         .map(|filename| Buffer::open(filename.as_str().as_ref()))
         .unwrap_or_else(|| Ok(Buffer::new()))
         .expect("FIXME: failed to open a file");
 
-    let mut size = terminal::size().unwrap();
-    let mut cursor = 0usize;
-    let mut view_line = 0usize;
-    let mut mode = Mode::Normal;
-    let mut command = String::new();
+    let mut editor = Editor::new(buffer);
+    editor.run(terminal);
 
-    redraw(&buffer, size, mode, view_line);
-    execute!(
-        stdout(),
-        MoveLeft(u16::MAX),
-        MoveUp(u16::MAX),
-        mode.cursor_style()
-    )
-    .unwrap();
-
-    // let mut old_mode = None;
+    /* // let mut old_mode = None;
 
     loop {
         let row = buffer.contents.char_to_line(cursor);
@@ -334,65 +322,8 @@ fn main() {
         }
     }
 
-    _ = a;
+    _ = a; */
 }
-
-fn jump_cursor(buffer: &Buffer, cursor: &mut usize, delta_x: isize, delta_y: isize) {
-    if buffer.contents.len_chars() == 0 {
-        // cant move if the buffer has nothing
-        *cursor = 0;
-        return;
-    }
-
-    if delta_x != 0 {
-        // delta X can wrap
-        *cursor = (*cursor)
-            .saturating_add_signed(delta_x)
-            .min(buffer.contents.len_chars() - 1);
-    }
-
-    // delta Y from now on
-    if delta_y == 0 || buffer.contents.len_lines() == 0 {
-        return;
-    }
-
-    // figure out what X position the cursor is moved to
-    let cursor_line = buffer.contents.char_to_line(*cursor);
-    let line_start = buffer.contents.line_to_char(cursor_line);
-    let cursor_x = *cursor - line_start;
-
-    let target_line = cursor_line
-        .saturating_add_signed(delta_y)
-        .min(buffer.contents.len_lines() - 1);
-    let target_line_len = buffer.contents.line(target_line).len_chars();
-
-    // place the cursor on the same X position or on the last char on the line
-    let target_line_start = buffer.contents.line_to_char(target_line);
-    *cursor = target_line_start + target_line_len.min(cursor_x);
-}
-
-fn jump_line_beg(buffer: &Buffer, cursor: &mut usize) {
-    *cursor = buffer
-        .contents
-        .line_to_char(buffer.contents.char_to_line(*cursor));
-}
-
-fn jump_line_end(buffer: &Buffer, cursor: &mut usize) {
-    let line = buffer.contents.char_to_line(*cursor);
-    let line_len = buffer.contents.line(line).len_chars().saturating_sub(1);
-    *cursor = buffer
-        .contents
-        .len_chars()
-        .min(buffer.contents.line_to_char(line) + line_len);
-}
-
-// fn jump_beg(_buffer: &Buffer, cursor: &mut usize) {
-//     *cursor = 0;
-// }
-
-// fn jump_end(buffer: &Buffer, cursor: &mut usize) {
-//     *cursor = buffer.contents.len_chars().saturating_sub(1);
-// }
 
 fn redraw(buffer: &Buffer, size: (u16, u16), mode: Mode, line: usize) {
     queue!(
@@ -447,24 +378,21 @@ fn redraw_line(buffer: &[String], line: u16, size: (u16, u16)) {
     }
 }
 
-struct AlternativeScreenGuard(());
+struct AlternativeScreenGuard;
 
 impl AlternativeScreenGuard {
-    pub fn enter() -> Self {
-        std::panic::set_hook(Box::new(move |i| {
-            execute!(stdout(), LeaveAlternateScreen).unwrap();
-            disable_raw_mode().unwrap();
-            eprintln!("{i}");
-        }));
-        enable_raw_mode().unwrap();
-        execute!(stdout(), EnterAlternateScreen).unwrap();
-        Self(())
+    pub fn enter() -> (Self, ratatui::DefaultTerminal) {
+        // std::panic::set_hook(Box::new(move |i| {
+        //     execute!(stdout(), LeaveAlternateScreen).unwrap();
+        //     disable_raw_mode().unwrap();
+        //     eprintln!("{i}");
+        // }));
+        (Self, ratatui::init())
     }
 }
 
 impl Drop for AlternativeScreenGuard {
     fn drop(&mut self) {
-        execute!(stdout(), LeaveAlternateScreen).unwrap();
-        disable_raw_mode().unwrap();
+        ratatui::restore();
     }
 }

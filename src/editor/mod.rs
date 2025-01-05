@@ -1,0 +1,486 @@
+use crossterm::{
+    cursor::SetCursorStyle,
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    execute, terminal,
+};
+use ratatui::{
+    layout::{Constraint, Layout, Position, Rect},
+    style::Style,
+    text::Line,
+    widgets::{Block, Widget},
+    DefaultTerminal, Frame,
+};
+
+use crate::{buffer::Buffer, mode::Mode};
+
+//
+
+mod theme;
+
+//
+
+struct BufferWidget<'a> {
+    buffer: &'a Buffer,
+    line: usize,
+}
+
+impl Widget for BufferWidget<'_> {
+    fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        for (y, line) in self
+            .buffer
+            .contents
+            .get_lines_at(self.line)
+            .into_iter()
+            .flatten()
+            .take(area.height as usize)
+            .enumerate()
+        {
+            for (x, ch) in line
+                .chars()
+                .take(area.width as usize)
+                .filter(|ch| *ch != '\n' && *ch != '\r')
+                .enumerate()
+            {
+                buf[(area.x + x as u16, area.y + y as u16)].set_char(ch);
+            }
+        }
+    }
+}
+
+pub struct Cursor {
+    line: usize,
+    row: usize,
+    col: usize,
+    mode: Mode,
+}
+
+impl Widget for Cursor {
+    fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        if self.row - self.line > area.height as usize || self.col > area.width as usize {
+            return;
+        }
+        let row = (self.row - self.line) as u16;
+        let col = self.col as u16;
+
+        for x in area.left()..area.right() {
+            buf[(x, row)].set_bg(theme::CURSOR_LINE);
+        }
+        for y in area.top()..area.bottom() {
+            buf[(col, y)].set_bg(theme::CURSOR_LINE);
+        }
+        if !self.mode.is_insert() {
+            buf[(col, row)]
+                .set_bg(theme::CURSOR)
+                .set_fg(theme::BACKGROUND);
+        }
+    }
+}
+
+pub struct Editor {
+    pub should_close: bool,
+
+    buffer: Buffer,
+
+    size: (u16, u16),
+    cursor: usize,
+    view_line: usize,
+    mode: Mode,
+    command: String,
+}
+
+impl Editor {
+    pub fn new(buffer: Buffer) -> Self {
+        Self {
+            should_close: false,
+            buffer,
+            size: terminal::size().unwrap(),
+            cursor: 0,
+            view_line: 0,
+            mode: Mode::Normal,
+            command: String::new(),
+        }
+    }
+
+    pub fn run(&mut self, mut terminal: DefaultTerminal) {
+        loop {
+            let area = terminal
+                .draw(|frame| {
+                    self.render(frame);
+                })
+                .unwrap()
+                .area;
+
+            if self.mode.is_command() {
+                execute!(terminal.backend_mut(), SetCursorStyle::SteadyBlock).unwrap();
+                terminal.show_cursor().unwrap();
+                terminal
+                    .set_cursor_position(Position {
+                        x: self.command.len() as u16,
+                        y: area.height.saturating_sub(1),
+                    })
+                    .unwrap();
+            } else if self.mode.is_insert() {
+                let row = self.buffer.contents.char_to_line(self.cursor);
+                let col = self.cursor - self.buffer.contents.line_to_char(row);
+                execute!(terminal.backend_mut(), SetCursorStyle::SteadyBar).unwrap();
+                terminal.show_cursor().unwrap();
+                terminal
+                    .set_cursor_position(Position {
+                        x: col as u16,
+                        y: row.saturating_sub(self.view_line) as u16,
+                    })
+                    .unwrap();
+            } else {
+                terminal.hide_cursor().unwrap();
+            }
+
+            self.event(event::read().unwrap());
+
+            if self.should_close {
+                break;
+            }
+        }
+    }
+
+    pub fn render(&mut self, frame: &mut Frame) {
+        frame.render_widget(
+            Block::new().style(Style::new().bg(theme::BACKGROUND)),
+            frame.area(),
+        );
+
+        let [buffer_area, info_area, cmd_area] = Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+
+        let row = self.buffer.contents.char_to_line(self.cursor);
+        let col = self.cursor - self.buffer.contents.line_to_char(row);
+
+        // keep the cursor within view
+        if row < self.view_line {
+            self.view_line = row;
+        }
+        if row + 3 > self.view_line + buffer_area.height as usize {
+            self.view_line = row + 3 - buffer_area.height as usize;
+        }
+
+        // render the text buffer
+        let buffer = BufferWidget {
+            buffer: &self.buffer,
+            line: self.view_line,
+        };
+        frame.render_widget(buffer, buffer_area);
+
+        // render the cursor and cursor crosshair
+        let cursor = Cursor {
+            line: self.view_line,
+            row,
+            col,
+            mode: self.mode,
+        };
+        frame.render_widget(cursor, buffer_area);
+
+        let info = Line::from_iter([
+            " ",
+            self.mode.as_str(),
+            "   ",
+            self.buffer.lossy_name.as_ref(),
+        ])
+        .style(Style::new().bg(theme::BUFFER_LINE));
+        frame.render_widget(info, info_area);
+
+        // let bg = Block::new().style(Style::new().bg(Color::Black));
+        // frame.render_widget(bg, cmd_area);
+        // frame.render_widget(self.command.as_str(), cmd_area);
+
+        let cmd = Block::new()
+            // .style(Style::new().bg(Color::Black))
+            .title(self.command.as_str());
+        frame.render_widget(cmd, cmd_area);
+
+        // frame.render_widget(Block::new().title("cmd area"), cmd_area);
+    }
+
+    pub fn event(&mut self, event: Event) {
+        match event {
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            }) => self.should_close = true,
+            Event::Key(KeyEvent {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) => {
+                if let Mode::Insert { append: true } = self.mode {
+                    self.cursor -= 1;
+                }
+                self.mode = Mode::Normal;
+                self.command.clear();
+            }
+            Event::Resize(w, h) => {
+                self.size = (w, h);
+            }
+            // Event::Key(KeyEvent {
+            //     code: KeyCode::Tab,
+            //     modifiers: KeyModifiers::NONE,
+            //     kind: KeyEventKind::Press,
+            //     ..
+            // }) => {}
+            Event::Key(KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if !self.mode.is_command() => self.jump_cursor(-1, 0),
+            Event::Key(KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if !self.mode.is_command() => self.jump_cursor(0, 1),
+            Event::Key(KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if !self.mode.is_command() => self.jump_cursor(0, -1),
+            Event::Key(KeyEvent {
+                code: KeyCode::Right,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if !self.mode.is_command() => self.jump_cursor(1, 0),
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => self.jump_cursor(-1, 0),
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => self.jump_cursor(0, 1),
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => self.jump_cursor(0, -1),
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => self.jump_cursor(1, 0),
+            Event::Key(KeyEvent {
+                code: KeyCode::PageUp,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if !self.mode.is_command() => self.jump_cursor(0, -(self.size.1 as isize - 1)),
+            Event::Key(KeyEvent {
+                code: KeyCode::PageDown,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if !self.mode.is_command() => self.jump_cursor(0, self.size.1 as isize - 3),
+            Event::Key(KeyEvent {
+                code: KeyCode::Home,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if !self.mode.is_command() => self.jump_line_beg(),
+            Event::Key(KeyEvent {
+                code: KeyCode::End,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if !self.mode.is_command() => self.jump_line_end(),
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('i'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => self.mode = Mode::Insert { append: false },
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('I'),
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                self.mode = Mode::Insert { append: false };
+                self.jump_line_beg();
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('a'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                self.mode = Mode::Insert { append: true };
+                self.jump_cursor(1, 0);
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('A'),
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                self.mode = Mode::Insert { append: true };
+                self.jump_line_end();
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char(':'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                self.mode = Mode::Command;
+                self.command.clear();
+                self.command.push(':');
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Backspace,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_insert() => {
+                if self.cursor == 0 {
+                    return;
+                }
+
+                self.buffer.contents.remove(self.cursor - 1..self.cursor);
+                self.jump_cursor(-1, 0);
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char(ch),
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_insert() => {
+                self.buffer.contents.insert_char(self.cursor, ch);
+                self.jump_cursor(1, 0);
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_insert() => {
+                self.buffer.contents.insert_char(self.cursor, '\n');
+                self.jump_cursor(1, 0);
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Backspace,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_command() => {
+                if self.command.len() >= 2 {
+                    _ = self.command.pop();
+                }
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char(ch),
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_command() => self.command.push(ch),
+            Event::Key(KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_command() => {
+                self.mode = Mode::Normal;
+                match self.command.as_str() {
+                    ":q" | ":q!" => self.should_close = true,
+                    ":wq" | ":x" => {
+                        self.buffer.write().unwrap();
+                        // fs::write(&args.file, buffer.join("\n")).unwrap();
+                        self.should_close = true;
+                    }
+                    ":w" => {
+                        // fs::write(&args.file, buffer.join("\n")).unwrap();
+                    }
+                    _ => {
+                        self.command.push_str("invalid command");
+                    }
+                }
+                self.command.clear();
+            }
+            _ => {}
+        }
+    }
+
+    fn jump_cursor(&mut self, delta_x: isize, delta_y: isize) {
+        if self.buffer.contents.len_chars() == 0 {
+            // cant move if the buffer has nothing
+            self.cursor = 0;
+            return;
+        }
+
+        if delta_x != 0 {
+            // delta X can wrap
+            self.cursor = self
+                .cursor
+                .saturating_add_signed(delta_x)
+                .min(self.buffer.contents.len_chars() - 1);
+        }
+
+        // delta Y from now on
+        if delta_y == 0 || self.buffer.contents.len_lines() == 0 {
+            return;
+        }
+
+        // figure out what X position the cursor is moved to
+        let cursor_line = self.buffer.contents.char_to_line(self.cursor);
+        let line_start = self.buffer.contents.line_to_char(cursor_line);
+        let cursor_x = self.cursor - line_start;
+
+        let target_line = cursor_line
+            .saturating_add_signed(delta_y)
+            .min(self.buffer.contents.len_lines() - 1);
+        let target_line_len = self.buffer.contents.line(target_line).len_chars();
+
+        // place the cursor on the same X position or on the last char on the line
+        let target_line_start = self.buffer.contents.line_to_char(target_line);
+        self.cursor = target_line_start + target_line_len.min(cursor_x);
+    }
+
+    fn jump_line_beg(&mut self) {
+        self.cursor = self
+            .buffer
+            .contents
+            .line_to_char(self.buffer.contents.char_to_line(self.cursor));
+    }
+
+    fn jump_line_end(&mut self) {
+        let line = self.buffer.contents.char_to_line(self.cursor);
+        let line_len = self
+            .buffer
+            .contents
+            .line(line)
+            .len_chars()
+            .saturating_sub(1);
+        self.cursor = self
+            .buffer
+            .contents
+            .len_chars()
+            .min(self.buffer.contents.line_to_char(line) + line_len);
+    }
+
+    fn jump_beg(&mut self) {
+        self.cursor = 0;
+    }
+
+    fn jump_end(&mut self) {
+        self.cursor = self.buffer.contents.len_chars().saturating_sub(1);
+    }
+}
