@@ -64,12 +64,21 @@ impl Widget for Cursor {
         let row = area.top() + (self.row - self.line) as u16;
         let col = area.left() + self.col as u16;
 
+        // highlight the current row
         for x in area.left()..area.right() {
             buf[(x, row)].set_bg(theme::CURSOR_LINE);
         }
+        // highlight the current column
         for y in area.top()..area.bottom() {
             buf[(col, y)].set_bg(theme::CURSOR_LINE);
         }
+        // highlight the 80th char column
+        if 80 <= area.right() {
+            for y in area.top()..area.bottom() {
+                buf[(80, y)].set_bg(theme::CURSOR_LINE);
+            }
+        }
+        // highlight the cursor itself
         if !self.mode.is_insert() {
             buf[(col, row)]
                 .set_bg(theme::CURSOR)
