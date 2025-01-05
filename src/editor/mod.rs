@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Layout, Position, Rect},
     style::Style,
     text::Line,
-    widgets::{Block, Widget},
+    widgets::{Block, Paragraph, Widget},
     DefaultTerminal, Frame,
 };
 
@@ -59,8 +59,8 @@ impl Widget for Cursor {
         if self.row - self.line > area.height as usize || self.col > area.width as usize {
             return;
         }
-        let row = (self.row - self.line) as u16;
-        let col = self.col as u16;
+        let row = area.top() + (self.row - self.line) as u16;
+        let col = area.left() + self.col as u16;
 
         for x in area.left()..area.right() {
             buf[(x, row)].set_bg(theme::CURSOR_LINE);
@@ -73,6 +73,40 @@ impl Widget for Cursor {
                 .set_bg(theme::CURSOR)
                 .set_fg(theme::BACKGROUND);
         }
+    }
+}
+
+pub struct LineNumbers {
+    line: usize,
+    row: usize,
+    col: usize,
+
+    lines: usize,
+}
+
+impl Widget for LineNumbers {
+    fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        use std::fmt::Write;
+
+        let mut text = String::with_capacity(area.width as usize * area.height as usize); // TODO: cache this memory
+
+        for y in 0..area.height {
+            if y as usize + self.line > self.lines {
+                _ = writeln!(&mut text, "~");
+            } else {
+                let num = self.line + y as usize;
+                let num = if num == self.row {
+                    num + 1
+                } else {
+                    // relative numbering
+                    num.abs_diff(self.row)
+                };
+
+                _ = writeln!(&mut text, "{:>width$}", num, width = area.width as usize);
+            }
+        }
+
+        Paragraph::new(text).render(area, buf);
     }
 }
 
@@ -126,7 +160,7 @@ impl Editor {
                 terminal.show_cursor().unwrap();
                 terminal
                     .set_cursor_position(Position {
-                        x: col as u16,
+                        x: col as u16 + self.buffer.contents.len_lines().ilog10() as u16 + 5,
                         y: row.saturating_sub(self.view_line) as u16,
                     })
                     .unwrap();
@@ -155,6 +189,16 @@ impl Editor {
         ])
         .areas(frame.area());
 
+        let lines = self.buffer.contents.len_lines();
+
+        let [_, line_numbers_area, _, buffer_area] = Layout::horizontal([
+            Constraint::Length(2),
+            Constraint::Length(lines.ilog10() as u16 + 1),
+            Constraint::Length(2),
+            Constraint::Min(0),
+        ])
+        .areas(buffer_area);
+
         let row = self.buffer.contents.char_to_line(self.cursor);
         let col = self.cursor - self.buffer.contents.line_to_char(row);
 
@@ -165,6 +209,15 @@ impl Editor {
         if row + 3 > self.view_line + buffer_area.height as usize {
             self.view_line = row + 3 - buffer_area.height as usize;
         }
+
+        // render line numbers
+        let line_numbers = LineNumbers {
+            line: self.view_line,
+            row,
+            col,
+            lines,
+        };
+        frame.render_widget(line_numbers, line_numbers_area);
 
         // render the text buffer
         let buffer = BufferWidget {
