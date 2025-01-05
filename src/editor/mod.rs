@@ -386,6 +386,90 @@ impl Editor {
                 ..
             }) if !self.mode.is_command() => self.jump_line_end(),
             Event::Key(KeyEvent {
+                code: KeyCode::Char('w'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                if self.cursor + 1 >= self.buffer.contents.len_chars() {
+                    return;
+                }
+
+                self.cursor += 1;
+                for _ in self
+                    .buffer
+                    .contents
+                    .chars_at(self.cursor)
+                    .scan(None, |first, ch| {
+                        let ty = ch.is_alphanumeric();
+                        (*first.get_or_insert(ty) == ty).then_some(())
+                    })
+                    .skip(1)
+                {
+                    self.cursor += 1;
+                }
+
+                for _ in self
+                    .buffer
+                    .contents
+                    .get_chars_at(self.cursor + 1)
+                    .into_iter()
+                    .flatten()
+                    .take_while(|ch| ch.is_whitespace())
+                {
+                    self.cursor += 1;
+                }
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('e'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                if self.cursor + 1 >= self.buffer.contents.len_chars() {
+                    return;
+                }
+
+                self.cursor += 1;
+                for _ in self
+                    .buffer
+                    .contents
+                    .chars_at(self.cursor)
+                    .scan(None, |first, ch| {
+                        let ty = ch.is_alphanumeric();
+                        (*first.get_or_insert(ty) == ty).then_some(())
+                    })
+                    .skip(1)
+                {
+                    self.cursor += 1;
+                }
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                if self.cursor == 0 {
+                    return;
+                }
+
+                self.cursor -= 1;
+                for _ in self
+                    .buffer
+                    .contents
+                    .chars_at(self.cursor + 1)
+                    .reversed()
+                    .scan(None, |first, ch| {
+                        let ty = ch.is_alphanumeric();
+                        (*first.get_or_insert(ty) == ty).then_some(())
+                    })
+                    .skip(1)
+                {
+                    self.cursor -= 1;
+                }
+            }
+            Event::Key(KeyEvent {
                 code: KeyCode::Char('i'),
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
