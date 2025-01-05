@@ -424,6 +424,21 @@ impl Editor {
                 self.command.push(':');
             }
             Event::Key(KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                if self.cursor == 0 {
+                    return;
+                }
+
+                _ = self
+                    .buffer
+                    .contents
+                    .try_remove(self.cursor..self.cursor + 1);
+            }
+            Event::Key(KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
