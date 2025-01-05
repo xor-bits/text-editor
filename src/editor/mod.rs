@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use crossterm::{
     cursor::SetCursorStyle,
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -91,22 +93,34 @@ impl Widget for LineNumbers {
         let mut text = String::with_capacity(area.width as usize * area.height as usize); // TODO: cache this memory
 
         for y in 0..area.height {
-            if y as usize + self.line > self.lines {
-                _ = writeln!(&mut text, "~");
-            } else {
-                let num = self.line + y as usize;
-                let num = if num == self.row {
-                    num + 1
-                } else {
-                    // relative numbering
-                    num.abs_diff(self.row)
-                };
+            match (y as usize + self.line + 1).cmp(&self.lines) {
+                Ordering::Equal => {
+                    _ = writeln!(&mut text, "{:>width$}", "~", width = area.width as usize);
+                }
+                Ordering::Less => {
+                    let num = self.line + y as usize;
+                    let num = if num == self.row {
+                        num + 1
+                    } else {
+                        // relative numbering
+                        num.abs_diff(self.row)
+                    };
 
-                _ = writeln!(&mut text, "{:>width$}", num, width = area.width as usize);
+                    _ = writeln!(&mut text, "{:>width$}", num, width = area.width as usize);
+                }
+                _ => {}
             }
         }
 
         Paragraph::new(text).render(area, buf);
+
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                if y as usize != self.row - self.line {
+                    buf[(x, y)].set_fg(theme::INACTIVE);
+                }
+            }
+        }
     }
 }
 
