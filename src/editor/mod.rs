@@ -258,13 +258,18 @@ impl Editor {
         };
         frame.render_widget(cursor, buffer_area);
 
-        let info = Line::from_iter([
+        let cursor_pos = format!("{row}:{col}");
+        let left = Line::from_iter([
             " ",
             self.mode.as_str(),
             "   ",
             self.buffer.lossy_name.as_ref(),
-        ])
-        .style(Style::new().bg(theme::BUFFER_LINE));
+        ]);
+        let right = Line::from_iter([cursor_pos.as_str(), " "]);
+        let info = Block::new()
+            .title(left.left_aligned())
+            .title(right.right_aligned())
+            .style(Style::new().bg(theme::BUFFER_LINE));
         frame.render_widget(info, info_area);
 
         // let bg = Block::new().style(Style::new().bg(Color::Black));
