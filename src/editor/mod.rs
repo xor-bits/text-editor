@@ -503,6 +503,27 @@ impl Editor {
                 self.jump_line_end();
             }
             Event::Key(KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                self.mode = Mode::Insert { append: true };
+                self.jump_line_end();
+                self.buffer.contents.insert_char(self.cursor, '\n');
+                self.jump_cursor(1, 0);
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('O'),
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                self.mode = Mode::Insert { append: true };
+                self.jump_line_beg();
+                self.buffer.contents.insert_char(self.cursor, '\n');
+            }
+            Event::Key(KeyEvent {
                 code: KeyCode::Char(':'),
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
