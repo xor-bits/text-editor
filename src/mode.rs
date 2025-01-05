@@ -7,6 +7,7 @@ pub enum Mode {
     Normal,
     Insert { append: bool },
     Command,
+    Action,
 }
 
 impl Mode {
@@ -15,6 +16,7 @@ impl Mode {
             Mode::Normal => "NOR",
             Mode::Insert { .. } => "INS",
             Mode::Command => "CMD",
+            Mode::Action => "ACT",
         }
     }
 
@@ -23,6 +25,7 @@ impl Mode {
             Mode::Normal => SetCursorStyle::SteadyBlock,
             Mode::Insert { .. } => SetCursorStyle::SteadyBar,
             Mode::Command => SetCursorStyle::SteadyBar,
+            Mode::Action => SetCursorStyle::SteadyBlock,
         }
     }
 
@@ -48,5 +51,13 @@ impl Mode {
     #[must_use]
     pub fn is_command(&self) -> bool {
         matches!(self, Self::Command)
+    }
+
+    /// Returns `true` if the mode is [`Action`].
+    ///
+    /// [`Action`]: Mode::Action
+    #[must_use]
+    pub fn is_action(&self) -> bool {
+        matches!(self, Self::Action)
     }
 }

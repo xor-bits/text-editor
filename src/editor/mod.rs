@@ -133,6 +133,13 @@ impl Widget for LineNumbers {
     }
 }
 
+pub enum Action {
+    JumpForwards,
+    JumpBackwards,
+    JumpForwardsBefore,
+    JumpBackwardsBefore,
+}
+
 pub struct Editor {
     pub should_close: bool,
 
@@ -143,6 +150,7 @@ pub struct Editor {
     view_line: usize,
     mode: Mode,
     command: String,
+    action: Action,
 }
 
 impl Editor {
@@ -155,6 +163,7 @@ impl Editor {
             view_line: 0,
             mode: Mode::Normal,
             command: String::new(),
+            action: Action::JumpForwards,
         }
     }
 
@@ -287,6 +296,44 @@ impl Editor {
     pub fn event(&mut self, event: Event) {
         match event {
             Event::Key(KeyEvent {
+                code: KeyCode::Char(ch),
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_action() => match self.action {
+                Action::JumpForwards => {
+                    self.cursor += self
+                        .find(self.cursor + 1, |cur_ch| cur_ch == ch)
+                        .map_or(0, |n| n + 1);
+                    self.mode = Mode::Normal;
+                }
+                Action::JumpBackwards => {
+                    if self.cursor == 0 {
+                        self.mode = Mode::Normal;
+                        return;
+                    }
+                    self.cursor -= self
+                        .rfind(self.cursor - 1, |cur_ch| cur_ch == ch)
+                        .map_or(0, |n| n + 1);
+                    self.mode = Mode::Normal;
+                }
+                Action::JumpForwardsBefore => {
+                    self.cursor += self
+                        .find(self.cursor + 2, |cur_ch| cur_ch == ch)
+                        .map_or(0, |n| n + 1);
+                    self.mode = Mode::Normal;
+                }
+                Action::JumpBackwardsBefore => {
+                    if self.cursor <= 1 {
+                        self.mode = Mode::Normal;
+                        return;
+                    }
+                    self.cursor -= self
+                        .rfind(self.cursor - 2, |cur_ch| cur_ch == ch)
+                        .map_or(0, |n| n + 3);
+                    self.mode = Mode::Normal;
+                }
+            },
+            Event::Key(KeyEvent {
                 code: KeyCode::Char('c'),
                 modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
@@ -396,29 +443,8 @@ impl Editor {
                 }
 
                 self.cursor += 1;
-                for _ in self
-                    .buffer
-                    .contents
-                    .chars_at(self.cursor)
-                    .scan(None, |first, ch| {
-                        let ty = ch.is_alphanumeric();
-                        (*first.get_or_insert(ty) == ty).then_some(())
-                    })
-                    .skip(1)
-                {
-                    self.cursor += 1;
-                }
-
-                for _ in self
-                    .buffer
-                    .contents
-                    .get_chars_at(self.cursor + 1)
-                    .into_iter()
-                    .flatten()
-                    .take_while(|ch| ch.is_whitespace())
-                {
-                    self.cursor += 1;
-                }
+                self.cursor += self.find_boundary(self.cursor);
+                self.cursor += self.count_matching(self.cursor + 1, |ch| ch.is_whitespace());
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Char('e'),
@@ -431,18 +457,7 @@ impl Editor {
                 }
 
                 self.cursor += 1;
-                for _ in self
-                    .buffer
-                    .contents
-                    .chars_at(self.cursor)
-                    .scan(None, |first, ch| {
-                        let ty = ch.is_alphanumeric();
-                        (*first.get_or_insert(ty) == ty).then_some(())
-                    })
-                    .skip(1)
-                {
-                    self.cursor += 1;
-                }
+                self.cursor += self.find_boundary(self.cursor);
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Char('b'),
@@ -455,19 +470,7 @@ impl Editor {
                 }
 
                 self.cursor -= 1;
-                for _ in self
-                    .buffer
-                    .contents
-                    .chars_at(self.cursor + 1)
-                    .reversed()
-                    .scan(None, |first, ch| {
-                        let ty = ch.is_alphanumeric();
-                        (*first.get_or_insert(ty) == ty).then_some(())
-                    })
-                    .skip(1)
-                {
-                    self.cursor -= 1;
-                }
+                self.cursor -= self.rfind_boundary(self.cursor);
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Char('i'),
@@ -522,6 +525,42 @@ impl Editor {
                 self.mode = Mode::Insert { append: true };
                 self.jump_line_beg();
                 self.buffer.contents.insert_char(self.cursor, '\n');
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                self.mode = Mode::Action;
+                self.action = Action::JumpForwards;
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('F'),
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                self.mode = Mode::Action;
+                self.action = Action::JumpBackwards;
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                self.mode = Mode::Action;
+                self.action = Action::JumpForwardsBefore;
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('T'),
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.mode.is_normal() => {
+                self.mode = Mode::Action;
+                self.action = Action::JumpBackwardsBefore;
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Char(':'),
@@ -617,6 +656,65 @@ impl Editor {
             }
             _ => {}
         }
+    }
+
+    /// count matching characters starting and including `from`
+    fn count_matching(&self, from: usize, mut pred: impl FnMut(char) -> bool) -> usize {
+        self.buffer
+            .contents
+            .get_chars_at(from)
+            .into_iter()
+            .flatten()
+            .take_while(|ch| pred(*ch))
+            .count()
+    }
+
+    /// find the next matching `pred` starting and including `from`
+    fn find(&self, from: usize, pred: impl FnMut(char) -> bool) -> Option<usize> {
+        self.buffer
+            .contents
+            .get_chars_at(from)
+            .into_iter()
+            .flatten()
+            .position(pred)
+    }
+
+    /// reverse find the next matching `pred` starting and including `from`
+    fn rfind(&self, from: usize, pred: impl FnMut(char) -> bool) -> Option<usize> {
+        self.buffer
+            .contents
+            .get_chars_at(from + 1)
+            .map(|s| s.reversed())
+            .into_iter()
+            .flatten()
+            .position(pred)
+    }
+
+    /// find the next word boundary starting and including `from`
+    fn find_boundary(&self, from: usize) -> usize {
+        self.buffer
+            .contents
+            .chars_at(from)
+            .scan(None, |first, ch| {
+                let ty = ch.is_alphanumeric();
+                (*first.get_or_insert(ty) == ty).then_some(())
+            })
+            .skip(1)
+            .count()
+    }
+
+    /// reverse find the next word boundary starting and including `from`
+    fn rfind_boundary(&self, from: usize) -> usize {
+        self.buffer
+            .contents
+            .chars_at(from + 1)
+            .reversed()
+            .scan(None, |first, ch| {
+                let ty = ch.is_alphanumeric();
+                (*first.get_or_insert(ty) == ty).then_some(())
+            })
+            .skip(1)
+            .count()
     }
 
     fn jump_cursor(&mut self, delta_x: isize, delta_y: isize) {
