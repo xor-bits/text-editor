@@ -138,6 +138,7 @@ pub trait Layer: Sync + Send {
             }
             Entry::Action(action) => {
                 action.run(editor);
+                editor.mode = editor.mode.prev().mode();
             }
         };
 
@@ -220,6 +221,7 @@ impl Layer for Insert {
             }
             Entry::Action(action) => {
                 action.run(editor);
+                editor.mode = editor.mode.prev().mode();
             }
         };
 
@@ -254,6 +256,7 @@ impl Layer for Command {
             }
             Entry::Action(action) => {
                 action.run(editor);
+                editor.mode = editor.mode.prev().mode();
             }
         };
 
@@ -366,6 +369,10 @@ static DEFAULT_NORMAL: LazyLock<Arc<dyn Layer>> = LazyLock::new(|| {
         "S-F":       act::JumpBackwardsTo::arc(),
         "S-T":       act::JumpBackwardsUntil::arc(),
         "d":         act::Delete::arc(),
+        "g":         map! {
+            "g":         act::MoveBufferBeg::arc(),
+            "e":         act::MoveBufferEnd::arc(),
+        },
     }
     Arc::new(Normal(normal)) as _
 });

@@ -242,7 +242,7 @@ impl Action for MoveBufferBeg {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_cursor(-isize::MAX, -isize::MAX);
+        editor.jump_beg();
     }
 }
 
@@ -261,7 +261,7 @@ impl Action for MoveBufferEnd {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_cursor(isize::MAX, isize::MAX);
+        editor.jump_end();
     }
 }
 
