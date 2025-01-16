@@ -1,13 +1,22 @@
+use std::sync::Arc;
+
 use crossterm::cursor::SetCursorStyle;
+
+use crate::editor::keymap::Layer;
 
 //
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone)]
 pub enum Mode {
     Normal,
-    Insert { append: bool },
+    Insert {
+        append: bool,
+    },
     Command,
-    Action,
+    Action {
+        layer: Arc<dyn Layer>,
+        prev: ModeSubset,
+    },
 }
 
 impl Mode {
@@ -16,7 +25,16 @@ impl Mode {
             Mode::Normal => "NOR",
             Mode::Insert { .. } => "INS",
             Mode::Command => "CMD",
-            Mode::Action => "ACT",
+            Mode::Action { .. } => "ACT",
+        }
+    }
+
+    pub const fn prev(&self) -> ModeSubset {
+        match self {
+            Mode::Normal => ModeSubset::Normal,
+            Mode::Insert { append } => ModeSubset::Insert { append: *append },
+            Mode::Command => ModeSubset::Command,
+            Mode::Action { prev, .. } => *prev,
         }
     }
 
@@ -25,7 +43,7 @@ impl Mode {
             Mode::Normal => SetCursorStyle::SteadyBlock,
             Mode::Insert { .. } => SetCursorStyle::SteadyBar,
             Mode::Command => SetCursorStyle::SteadyBar,
-            Mode::Action => SetCursorStyle::SteadyBlock,
+            Mode::Action { .. } => SetCursorStyle::SteadyBlock,
         }
     }
 
@@ -58,6 +76,25 @@ impl Mode {
     /// [`Action`]: Mode::Action
     #[must_use]
     pub fn is_action(&self) -> bool {
-        matches!(self, Self::Action)
+        matches!(self, Self::Action { .. })
+    }
+}
+
+//
+
+#[derive(Clone, Copy)]
+pub enum ModeSubset {
+    Normal,
+    Insert { append: bool },
+    Command,
+}
+
+impl ModeSubset {
+    pub const fn mode(self) -> Mode {
+        match self {
+            ModeSubset::Normal => Mode::Normal,
+            ModeSubset::Insert { append } => Mode::Insert { append },
+            ModeSubset::Command => Mode::Command,
+        }
     }
 }

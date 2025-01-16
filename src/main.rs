@@ -3,23 +3,18 @@ use std::io::stdout;
 use self::{args::Args, buffer::Buffer, editor::Editor, mode::Mode};
 use clap::Parser;
 use crossterm::{
-    cursor::{MoveDown, MoveLeft, MoveRight, MoveUp},
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    cursor::{MoveDown, MoveLeft, MoveUp},
     execute, queue,
     style::{Color, SetBackgroundColor},
     terminal::{Clear, ClearType},
 };
-use ratatui::{
-    layout::{Constraint, Layout},
-    widgets::Block,
-};
 
 //
 
-mod args;
-mod buffer;
-mod editor;
-mod mode;
+pub mod args;
+pub mod buffer;
+pub mod editor;
+pub mod mode;
 
 //
 

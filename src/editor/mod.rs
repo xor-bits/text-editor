@@ -13,11 +13,18 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 
-use crate::{buffer::Buffer, mode::Mode};
+use crate::{
+    buffer::Buffer,
+    mode::{Mode, ModeSubset},
+};
+
+use self::keymap::{Code, Entry, Keymap};
 
 //
 
-mod theme;
+pub mod actions;
+pub mod keymap;
+pub mod theme;
 
 //
 
@@ -49,14 +56,14 @@ impl Widget for BufferWidget<'_> {
     }
 }
 
-pub struct Cursor {
+pub struct Cursor<'a> {
     line: usize,
     row: usize,
     col: usize,
-    mode: Mode,
+    mode: &'a Mode,
 }
 
-impl Widget for Cursor {
+impl Widget for Cursor<'_> {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
         if self.row - self.line > area.height as usize || self.col > area.width as usize {
             return;
@@ -133,15 +140,6 @@ impl Widget for LineNumbers {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Action {
-    JumpForwards,
-    JumpBackwards,
-    JumpForwardsBefore,
-    JumpBackwardsBefore,
-    None,
-}
-
 pub struct Editor {
     pub should_close: bool,
 
@@ -150,9 +148,11 @@ pub struct Editor {
     pub size: (u16, u16),
     pub cursor: usize,
     pub view_line: usize,
-    pub mode: Mode,
     pub command: String,
-    pub action: Action,
+
+    pub mode: Mode,
+
+    pub keymap: Keymap,
 }
 
 impl Editor {
@@ -163,9 +163,11 @@ impl Editor {
             size: terminal::size().unwrap(),
             cursor: 0,
             view_line: 0,
-            mode: Mode::Normal,
             command: String::new(),
-            action: Action::None,
+
+            mode: Mode::Normal,
+
+            keymap: Keymap::load(),
         }
     }
 
@@ -265,7 +267,7 @@ impl Editor {
             line: self.view_line,
             row,
             col,
-            mode: self.mode,
+            mode: &self.mode,
         };
         frame.render_widget(cursor, buffer_area);
 
@@ -308,7 +310,6 @@ impl Editor {
                 }
                 self.mode = Mode::Normal;
                 self.command.clear();
-                return;
             }
             /* Event::Key(KeyEvent {
                 code: KeyCode::Char('c'),
@@ -321,397 +322,35 @@ impl Editor {
             } */
             Event::Resize(w, h) => {
                 self.size = (w, h);
-                return;
             }
-            _ => {}
-        }
-
-        match self.mode {
-            Mode::Normal => self.normal_event(event),
-            Mode::Insert { .. } => self.insert_event(event),
-            Mode::Command => self.command_event(event),
-            Mode::Action => self.action_event(event),
-        }
-    }
-
-    pub fn normal_event(&mut self, event: Event) {
-        match event {
             Event::Key(KeyEvent {
-                code: KeyCode::Left,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(-1, 0),
-            Event::Key(KeyEvent {
-                code: KeyCode::Down,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(0, 1),
-            Event::Key(KeyEvent {
-                code: KeyCode::Up,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(0, -1),
-            Event::Key(KeyEvent {
-                code: KeyCode::Right,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(1, 0),
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(-1, 0),
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('j'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(0, 1),
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(0, -1),
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(1, 0),
-            Event::Key(KeyEvent {
-                code: KeyCode::PageUp,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(0, -(self.size.1 as isize - 1)),
-            Event::Key(KeyEvent {
-                code: KeyCode::PageDown,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(0, self.size.1 as isize - 3),
-            Event::Key(KeyEvent {
-                code: KeyCode::Home,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_line_beg(),
-            Event::Key(KeyEvent {
-                code: KeyCode::End,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_line_end(),
-
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('w'),
-                modifiers: KeyModifiers::NONE,
+                code,
+                modifiers,
                 kind: KeyEventKind::Press,
                 ..
             }) => {
-                if self.cursor + 1 >= self.buffer.contents.len_chars() {
-                    return;
-                }
-
-                self.cursor += 1;
-                self.cursor += self.find_boundary(self.cursor);
-                self.cursor += self.count_matching(self.cursor + 1, |ch| ch.is_whitespace());
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('e'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                if self.cursor + 1 >= self.buffer.contents.len_chars() {
-                    return;
-                }
-
-                self.cursor += 1;
-                self.cursor += self.find_boundary(self.cursor);
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('b'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                if self.cursor == 0 {
-                    return;
-                }
-
-                self.cursor -= 1;
-                self.cursor -= self.rfind_boundary(self.cursor);
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('i'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.mode = Mode::Insert { append: false },
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('I'),
-                modifiers: KeyModifiers::SHIFT,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Insert { append: false };
-                self.jump_line_beg();
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('a'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Insert { append: true };
-                self.jump_cursor(1, 0);
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('A'),
-                modifiers: KeyModifiers::SHIFT,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Insert { append: true };
-                self.jump_line_end();
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('o'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Insert { append: true };
-                self.jump_line_end();
-                self.buffer.contents.insert_char(self.cursor, '\n');
-                self.jump_cursor(1, 0);
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('O'),
-                modifiers: KeyModifiers::SHIFT,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Insert { append: true };
-                self.jump_line_beg();
-                self.buffer.contents.insert_char(self.cursor, '\n');
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('f'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Action;
-                self.action = Action::JumpForwards;
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('F'),
-                modifiers: KeyModifiers::SHIFT,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Action;
-                self.action = Action::JumpBackwards;
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('t'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Action;
-                self.action = Action::JumpForwardsBefore;
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('T'),
-                modifiers: KeyModifiers::SHIFT,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Action;
-                self.action = Action::JumpBackwardsBefore;
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char(':'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Command;
-                self.command.clear();
-                self.command.push(':');
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                if self.cursor == 0 {
-                    return;
-                }
-
-                _ = self
-                    .buffer
-                    .contents
-                    .try_remove(self.cursor..self.cursor + 1);
-            }
-            _ => {}
-        }
-    }
-
-    pub fn insert_event(&mut self, event: Event) {
-        match event {
-            Event::Key(KeyEvent {
-                code: KeyCode::Left,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(-1, 0),
-            Event::Key(KeyEvent {
-                code: KeyCode::Down,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(0, 1),
-            Event::Key(KeyEvent {
-                code: KeyCode::Up,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(0, -1),
-            Event::Key(KeyEvent {
-                code: KeyCode::Right,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.jump_cursor(1, 0),
-            Event::Key(KeyEvent {
-                code: KeyCode::Backspace,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                if self.cursor == 0 {
-                    return;
-                }
-
-                self.buffer.contents.remove(self.cursor - 1..self.cursor);
-                self.jump_cursor(-1, 0);
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char(ch),
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.buffer.contents.insert_char(self.cursor, ch);
-                self.jump_cursor(1, 0);
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.buffer.contents.insert_char(self.cursor, '\n');
-                self.jump_cursor(1, 0);
-            }
-            _ => {}
-        }
-    }
-
-    pub fn command_event(&mut self, event: Event) {
-        match event {
-            Event::Key(KeyEvent {
-                code: KeyCode::Backspace,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                if self.command.len() >= 2 {
-                    _ = self.command.pop();
-                }
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char(ch),
-                kind: KeyEventKind::Press,
-                ..
-            }) => self.command.push(ch),
-            Event::Key(KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                self.mode = Mode::Normal;
-                match self.command.as_str() {
-                    ":q" | ":q!" => self.should_close = true,
-                    ":wq" | ":x" => {
-                        self.buffer.write().unwrap();
-                        self.should_close = true;
+                let (layer, prev) = match self.mode {
+                    Mode::Normal => (self.keymap.normal(), ModeSubset::Normal),
+                    Mode::Insert { append } => {
+                        (self.keymap.insert(), ModeSubset::Insert { append })
                     }
-                    ":w" => {
-                        self.buffer.write().unwrap();
-                    }
-                    _ => {
-                        self.command.push_str("invalid command");
-                    }
+                    Mode::Command => (self.keymap.command(), ModeSubset::Command),
+                    Mode::Action { ref layer, prev } => (layer.clone(), prev),
+                };
+
+                if layer.run(
+                    Code {
+                        keycode: code,
+                        modifiers,
+                    },
+                    self,
+                ) {
+                    return;
                 }
-                self.command.clear();
+
+                self.mode = prev.mode();
             }
             _ => {}
-        }
-    }
-
-    pub fn action_event(&mut self, event: Event) {
-        let Event::Key(KeyEvent {
-            code: KeyCode::Char(ch),
-            kind: KeyEventKind::Press,
-            ..
-        }) = event
-        else {
-            return;
-        };
-
-        let action = self.action;
-        self.action = Action::None;
-
-        match action {
-            Action::JumpForwards => {
-                self.cursor += self
-                    .find(self.cursor + 1, |cur_ch| cur_ch == ch)
-                    .map_or(0, |n| n + 1);
-            }
-            Action::JumpBackwards => {
-                if self.cursor == 0 {
-                    return;
-                }
-                self.cursor -= self
-                    .rfind(self.cursor - 1, |cur_ch| cur_ch == ch)
-                    .map_or(0, |n| n + 1);
-            }
-            Action::JumpForwardsBefore => {
-                self.cursor += self
-                    .find(self.cursor + 2, |cur_ch| cur_ch == ch)
-                    .map_or(0, |n| n + 1);
-            }
-            Action::JumpBackwardsBefore => {
-                if self.cursor <= 1 {
-                    return;
-                }
-                self.cursor -= self
-                    .rfind(self.cursor - 2, |cur_ch| cur_ch == ch)
-                    .map_or(0, |n| n + 3);
-            }
-            Action::None => {}
         }
     }
 
