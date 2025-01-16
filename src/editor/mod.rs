@@ -18,7 +18,7 @@ use crate::{
     mode::{Mode, ModeSubset},
 };
 
-use self::keymap::{Code, Entry, Keymap};
+use self::keymap::{Code, Keymap};
 
 //
 
@@ -97,8 +97,6 @@ impl Widget for Cursor<'_> {
 pub struct LineNumbers {
     line: usize,
     row: usize,
-    col: usize,
-
     lines: usize,
 }
 
@@ -250,7 +248,6 @@ impl Editor {
         let line_numbers = LineNumbers {
             line: self.view_line,
             row,
-            col,
             lines,
         };
         frame.render_widget(line_numbers, line_numbers_area);

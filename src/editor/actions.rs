@@ -1,4 +1,4 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
