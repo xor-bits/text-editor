@@ -1,3 +1,9 @@
+use std::{
+    env,
+    io::Write,
+    process::{Child, Command, Stdio},
+};
+
 use self::{args::Args, buffer::Buffer, editor::Editor};
 use clap::Parser;
 
@@ -13,13 +19,13 @@ pub mod mode;
 fn main() {
     let args: Args = Args::parse();
 
-    let (_guard, terminal) = AlternativeScreenGuard::enter();
-
     let buffer = args
         .file
-        .map(|filename| Buffer::open(filename.as_str().as_ref()))
+        .map(|filename| Buffer::open(filename.as_str()))
         .unwrap_or_else(|| Ok(Buffer::new()))
         .expect("FIXME: failed to open a file");
+
+    let (_guard, terminal) = AlternativeScreenGuard::enter();
 
     let mut editor = Editor::new(buffer);
     editor.run(terminal);

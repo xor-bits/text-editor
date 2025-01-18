@@ -1,8 +1,9 @@
 use std::{
     borrow::Cow,
     fs,
-    io::{self, Seek},
+    io::{self, BufRead, BufReader, Read, Seek, Write},
     path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
 };
 
 use ropey::Rope;
@@ -19,6 +20,7 @@ pub struct Buffer {
 pub enum BufferInner {
     File { inner: fs::File, readonly: bool },
     NewFile { inner: PathBuf },
+    // Remote { inner: PathBuf, ctx: Child },
     Scratch,
 }
 
@@ -31,7 +33,73 @@ impl Buffer {
         }
     }
 
-    pub fn open(path: &Path) -> io::Result<Self> {
+    pub fn open(path: &str) -> io::Result<Self> {
+        if let Some((parts, file)) = path.rsplit_once(':') {
+            Self::open_remote(parts, file.as_ref())
+        } else {
+            Self::open_local(path.as_ref())
+        }
+    }
+
+    pub fn open_remote(parts: &str, path: &Path) -> io::Result<Self> {
+        let mut cmd = Command::new("sh")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        let mut stdin = cmd.stdin.take().unwrap();
+        let mut stdout = BufReader::new(cmd.stdout.take().unwrap());
+        let mut stderr = BufReader::new(cmd.stderr.take().unwrap());
+
+        for hop in parts.split('|') {
+            let mut part = hop.split(':');
+            let hop_type = part.next().unwrap_or(hop);
+
+            match hop_type {
+                "ssh" => {
+                    let target = part.next().ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "ssh hop missing destination")
+                    })?;
+
+                    // FIXME: sanitation
+                    writeln!(stdin, "ssh \'{target}\' \'sh\'")?;
+
+                    let Some("askpw") = part.next() else {
+                        continue;
+                    };
+                }
+                "sudo" => {
+                    // FIXME: sanitation
+                    writeln!(stdin, "sudo -S -p '<??>' sh")?;
+
+                    let Some("askpw") = part.next() else {
+                        continue;
+                    };
+
+                    // let mut buf = [0u8; 4];
+                    // stderr.read_exact(&mut buf)?;
+                    // if &buf != b"<??>" {
+                    //     continue;
+                    // }
+
+                    // write!(stdin, "{}");
+                }
+                other => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        format!("unsupported hop type: {other}").as_str(),
+                    ))
+                }
+            }
+        }
+
+        cmd.wait().unwrap();
+
+        todo!()
+    }
+
+    pub fn open_local(path: &Path) -> io::Result<Self> {
         let lossy_name = path.to_string_lossy().to_string().into();
 
         // first try opening in RW mode
