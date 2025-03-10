@@ -1,9 +1,3 @@
-use std::{
-    env,
-    io::Write,
-    process::{Child, Command, Stdio},
-};
-
 use self::{args::Args, buffer::Buffer, editor::Editor};
 use clap::Parser;
 
