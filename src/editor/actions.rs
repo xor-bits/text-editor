@@ -897,7 +897,7 @@ impl Action for RefreshSuggestions {
         editor.command_suggestions.extend(
             DEFAULT_ACTIONS
                 .iter()
-                .filter(|act| act.act.name().starts_with(cmd))
+                .filter(|act| act.act.name().contains(cmd))
                 .cloned(),
         );
     }
