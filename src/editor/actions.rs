@@ -428,7 +428,7 @@ impl Action for SwitchToCommand {
     }
 
     fn description(&self) -> &str {
-        "insert a line above and switch to insert mode"
+        "switch to command mode"
     }
 
     fn run(&self, editor: &mut Editor) {
