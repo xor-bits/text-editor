@@ -137,6 +137,11 @@ pub trait Layer: Sync + Send {
                 };
             }
             Entry::Action(action) => {
+                tracing::debug!(
+                    "running action {} ({})",
+                    action.name(),
+                    action.description()
+                );
                 action.run(editor);
                 editor.mode = editor.mode.prev().mode();
             }
