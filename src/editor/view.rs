@@ -98,8 +98,6 @@ impl BufferView {
         let real_cursor_col =
             self.cursor - buffer.contents.line_to_char(row) + buffer_area.x as usize;
 
-        tracing::debug!("real cursor = {real_cursor_col},{real_cursor_row}");
-
         (
             (col, row),
             buffer.lossy_name.as_ref(),

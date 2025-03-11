@@ -364,7 +364,7 @@ impl Editor {
         view.cursor = buffer
             .contents
             .len_chars()
-            .min(buffer.contents.line_to_char(line) + line_len);
+            .min((buffer.contents.line_to_char(line) + line_len).saturating_sub(2));
     }
 
     fn jump_beg(&mut self) {
