@@ -1,12 +1,15 @@
 use std::{
     borrow::Cow,
     fs,
-    io::{self, BufRead, BufReader, Read, Seek, Write},
+    io::{self, Seek},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    sync::{Arc, LazyLock},
 };
 
+use eyre::{bail, Result};
 use ropey::Rope;
+
+use crate::tramp::{ConnectionPool, Part};
 
 //
 
@@ -20,7 +23,7 @@ pub struct Buffer {
 pub enum BufferInner {
     File { inner: fs::File, readonly: bool },
     NewFile { inner: PathBuf },
-    // Remote { inner: PathBuf, ctx: Child },
+    Remote { remote: Arc<[Part]> },
     Scratch,
 }
 
@@ -33,73 +36,31 @@ impl Buffer {
         }
     }
 
-    pub fn open(path: &str) -> io::Result<Self> {
+    pub fn open(path: &str) -> Result<Self> {
         if let Some((parts, file)) = path.rsplit_once(':') {
-            Self::open_remote(parts, file.as_ref())
+            Ok(Self::open_remote(parts, file)?)
         } else {
-            Self::open_local(path.as_ref())
+            Ok(Self::open_local(path.as_ref())?)
         }
     }
 
-    pub fn open_remote(parts: &str, path: &Path) -> io::Result<Self> {
-        let mut cmd = Command::new("sh")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+    pub fn open_remote(parts: &str, path: &str) -> Result<Self> {
+        let lossy_name = path.to_string().into();
 
-        let mut stdin = cmd.stdin.take().unwrap();
-        let mut stdout = BufReader::new(cmd.stdout.take().unwrap());
-        let mut stderr = BufReader::new(cmd.stderr.take().unwrap());
+        let mut conn = CONN_POOL.connect(parts)?;
+        let file = conn.read_file(path)?;
+        let contents = Rope::from_reader(file)?;
+        let remote = conn.remote();
+        CONN_POOL.recycle(conn);
 
-        for hop in parts.split('|') {
-            let mut part = hop.split(':');
-            let hop_type = part.next().unwrap_or(hop);
-
-            match hop_type {
-                "ssh" => {
-                    let target = part.next().ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "ssh hop missing destination")
-                    })?;
-
-                    // FIXME: sanitation
-                    writeln!(stdin, "ssh \'{target}\' \'sh\'")?;
-
-                    let Some("askpw") = part.next() else {
-                        continue;
-                    };
-                }
-                "sudo" => {
-                    // FIXME: sanitation
-                    writeln!(stdin, "sudo -S -p '<??>' sh")?;
-
-                    let Some("askpw") = part.next() else {
-                        continue;
-                    };
-
-                    // let mut buf = [0u8; 4];
-                    // stderr.read_exact(&mut buf)?;
-                    // if &buf != b"<??>" {
-                    //     continue;
-                    // }
-
-                    // write!(stdin, "{}");
-                }
-                other => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
-                        format!("unsupported hop type: {other}").as_str(),
-                    ))
-                }
-            }
-        }
-
-        cmd.wait().unwrap();
-
-        todo!()
+        Ok(Self {
+            contents,
+            lossy_name,
+            inner: BufferInner::Remote { remote },
+        })
     }
 
-    pub fn open_local(path: &Path) -> io::Result<Self> {
+    pub fn open_local(path: &Path) -> Result<Self> {
         let lossy_name = path.to_string_lossy().to_string().into();
 
         // first try opening in RW mode
@@ -110,7 +71,7 @@ impl Buffer {
             .open(path)
         {
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
-            Err(other) => return Err(other),
+            Err(other) => bail!(other),
             Ok(file) => {
                 return Ok(Self {
                     contents: Rope::from_reader(&file)?,
@@ -131,7 +92,7 @@ impl Buffer {
             .open(path)
         {
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
-            Err(other) => return Err(other),
+            Err(other) => bail!(other),
             Ok(file) => {
                 return Ok(Self {
                     contents: Rope::from_reader(&file)?,
@@ -152,14 +113,14 @@ impl Buffer {
         })
     }
 
-    pub fn write(&mut self) -> io::Result<()> {
+    pub fn write(&mut self) -> Result<()> {
         match self.inner {
             BufferInner::File {
                 ref mut inner,
                 readonly,
             } => {
                 if readonly {
-                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, "readonly"));
+                    bail!("readonly");
                 }
 
                 inner.seek(io::SeekFrom::Start(0))?;
@@ -174,6 +135,13 @@ impl Buffer {
 
                 self.contents.write_to(new_file)?;
             }
+            BufferInner::Remote { ref remote } => {
+                let mut conn = CONN_POOL.connect_to(remote.clone())?;
+                let writer = conn.write_file(&self.lossy_name)?;
+                self.contents.write_to(writer)?;
+                conn.finish_write_file(&self.lossy_name)?;
+                CONN_POOL.recycle(conn);
+            }
             BufferInner::Scratch => {}
         };
 
@@ -186,3 +154,7 @@ impl Default for Buffer {
         Self::new()
     }
 }
+
+//
+
+static CONN_POOL: LazyLock<ConnectionPool> = LazyLock::new(ConnectionPool::new);

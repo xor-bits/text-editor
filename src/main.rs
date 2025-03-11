@@ -1,5 +1,6 @@
 use self::{args::Args, buffer::Buffer, editor::Editor};
 use clap::Parser;
+use eyre::Result;
 
 //
 
@@ -7,10 +8,13 @@ pub mod args;
 pub mod buffer;
 pub mod editor;
 pub mod mode;
+pub mod tramp;
 
 //
 
-fn main() {
+fn main() -> Result<()> {
+    color_eyre::install()?;
+
     let args: Args = Args::parse();
 
     let buffer = args
@@ -23,6 +27,8 @@ fn main() {
 
     let mut editor = Editor::new(buffer);
     editor.run(terminal);
+
+    Ok(())
 }
 
 struct AlternativeScreenGuard;

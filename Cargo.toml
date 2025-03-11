@@ -10,3 +10,8 @@ crossterm = "0.28.1"
 clap = { version = "4.5.23", features = ["derive"] }
 ropey = "1.6.1"
 arc-swap = "1.7.1"
+eyre = "0.6.12"
+color-eyre = "0.6.3"
+rexpect = "0.6.0"
+tempfile = "3.18.0"
+base64 = "0.22.1"

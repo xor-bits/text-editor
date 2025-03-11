@@ -775,7 +775,7 @@ impl Action for Write {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.should_close = true;
+        editor.buffer.write().unwrap();
     }
 }
 
