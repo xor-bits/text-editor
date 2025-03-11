@@ -1,12 +1,12 @@
-use std::sync::Arc;
+use std::{env, path::PathBuf, sync::Arc};
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::{
-    buffer::Buffer,
+    buffer::{Buffer, BufferInner},
     editor::{
         keymap::{Code, Entry, Layer},
-        view::BufferView,
+        popup::Popup,
     },
     mode::Mode,
 };
@@ -63,6 +63,8 @@ pub fn all_actions() -> impl IntoIterator<Item = Arc<dyn Action>> {
         BufferClose::arc(),
         BufferNext::arc(),
         BufferPrev::arc(),
+        //
+        FileExplorer::arc(),
     ]
 }
 
@@ -981,22 +983,7 @@ impl Action for Open {
             return;
         };
 
-        // look for existing open buffers
-        for (i, existing) in editor.buffers.iter().enumerate() {
-            if existing.name.as_ref() == path {
-                editor.view = BufferView::new(i);
-                return;
-            }
-        }
-
-        match Buffer::open(path) {
-            Ok(buf) => {
-                let idx = editor.buffers.len();
-                editor.buffers.push(buf);
-                editor.view = BufferView::new(idx);
-            }
-            Err(err) => tracing::error!("failed to open `{path}`: {err}"),
-        }
+        editor.open(path.to_string().as_str()); // FIXME: lifetime error
     }
 }
 
@@ -1065,5 +1052,53 @@ impl Action for BufferPrev {
     fn run(&self, editor: &mut Editor) {
         editor.view.buffer_index += 1;
         editor.view.buffer_index %= editor.buffers.len();
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct FileExplorer;
+
+impl Action for FileExplorer {
+    fn name(&self) -> &str {
+        "file-explorer"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        let buf = editor.current().buffer;
+        let (at, remote) = match &buf.inner {
+            BufferInner::File { .. } => {
+                let mut path = PathBuf::from(buf.name.to_string()).canonicalize().unwrap();
+                path.pop();
+                (path, None)
+            }
+            BufferInner::NewFile { inner } => {
+                let mut path = inner.clone();
+                path.pop();
+                (path, None)
+            }
+            BufferInner::Remote { remote } => {
+                let mut path = PathBuf::from(
+                    buf.name
+                        .rsplit_once(':')
+                        .map(|(_, path)| path)
+                        .unwrap_or(buf.name.as_ref())
+                        .to_string(),
+                );
+                path.pop();
+                (path, Some(remote.clone()))
+            }
+            BufferInner::Scratch => (env::current_dir().unwrap(), None),
+        };
+
+        match Popup::file_explorer(remote, at) {
+            Ok(popup) => {
+                editor.popup = popup;
+            }
+            Err(err) => {
+                tracing::error!("failed to open file explorer: {err}");
+            }
+        }
     }
 }

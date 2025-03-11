@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     fmt,
     io::{self, Cursor, Write},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
 };
 
@@ -182,13 +183,30 @@ impl Connection {
         Ok(self.shell.exp_string("__sh_prompt")?)
     }
 
-    pub fn list_files(&mut self) -> Result<()> {
-        tracing::trace!("running ls");
-        self.shell.send_line("ls")?;
-        let read = self.shell.exp_string("__sh_prompt")?;
-        tracing::trace!("got {read}");
+    pub fn canonicalize(&mut self, path: &Path) -> Result<PathBuf> {
+        // FIXME: sanitation
+        tracing::trace!("running 'realpath {path:?}'");
+        self.shell.writer.write_all(b"realpath ")?;
+        self.shell
+            .writer
+            .write_all(path.as_os_str().as_encoded_bytes())?;
+        let mut result = self.run_cmd_checked(format_args!(""))?;
+        if result.ends_with('\n') {
+            result.pop();
+        }
+        if result.ends_with('\r') {
+            result.pop();
+        }
+        Ok(PathBuf::from(result))
+    }
 
-        Ok(())
+    pub fn list_files(&mut self, path: &Path) -> Result<String> {
+        tracing::trace!("running 'ls -al {path:?}'");
+        self.shell.writer.write_all(b"ls -al ")?;
+        self.shell
+            .writer
+            .write_all(path.as_os_str().as_encoded_bytes())?;
+        self.run_cmd_checked(format_args!(""))
     }
 
     pub fn read_file(&mut self, filename: &str) -> Result<impl io::Read> {

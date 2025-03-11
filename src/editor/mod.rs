@@ -1,10 +1,12 @@
+use std::mem;
+
 use crossterm::{
     cursor::SetCursorStyle,
     event::{self, Event, KeyEvent, KeyEventKind},
     execute, terminal,
 };
 use ratatui::{
-    layout::{Constraint, Layout, Position, Rect},
+    layout::{Constraint, Layout, Margin, Position, Rect},
     style::{Style, Stylize},
     text::Line,
     widgets::Block,
@@ -18,6 +20,7 @@ use crate::{
 
 use self::{
     keymap::{ActionEntry, Code, Keymap},
+    popup::Popup,
     view::BufferView,
 };
 
@@ -25,6 +28,7 @@ use self::{
 
 pub mod actions;
 pub mod keymap;
+pub mod popup;
 pub mod theme;
 pub mod view;
 
@@ -37,6 +41,8 @@ pub struct Editor {
 
     pub buffers: Vec<Buffer>,
     pub view: BufferView,
+
+    pub popup: Popup,
 
     pub command: String,
     pub command_suggestions: Vec<ActionEntry>,
@@ -56,6 +62,8 @@ impl Editor {
 
             buffers: vec![buffer],
             view: BufferView::new(0),
+
+            popup: <_>::default(),
 
             command: String::new(),
             command_suggestions: Vec::new(),
@@ -194,10 +202,21 @@ impl Editor {
             .title(self.command.as_str());
         frame.render_widget(cmd, cmd_area);
 
+        let popup_area = buffer_area.inner(Margin {
+            horizontal: (buffer_area.width as f32 * 0.1) as u16,
+            vertical: (buffer_area.height as f32 * 0.1) as u16,
+        });
+        self.popup.render(popup_area, frame);
+
         // frame.render_widget(Block::new().title("cmd area"), cmd_area);
     }
 
     pub fn event(&mut self, event: Event) {
+        if !matches!(self.popup, Popup::None) {
+            self.popup = mem::take(&mut self.popup).event(self, &event);
+            return;
+        }
+
         match event {
             /* Event::Key(KeyEvent {
                 code: KeyCode::Char('c'),
@@ -242,6 +261,25 @@ impl Editor {
 
     pub fn current_mut(&mut self) -> BufferViewMut<'_> {
         BufferViewMut::new(&mut self.view, &mut self.buffers)
+    }
+
+    pub fn open(&mut self, path: &str) {
+        // look for existing open buffers
+        for (i, existing) in self.buffers.iter().enumerate() {
+            if existing.name.as_ref() == path {
+                self.view = BufferView::new(i);
+                return;
+            }
+        }
+
+        match Buffer::open(path) {
+            Ok(buf) => {
+                let idx = self.buffers.len();
+                self.buffers.push(buf);
+                self.view = BufferView::new(idx);
+            }
+            Err(err) => tracing::error!("failed to open `{path}`: {err}"),
+        }
     }
 }
 

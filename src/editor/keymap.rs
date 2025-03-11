@@ -125,6 +125,7 @@ pub trait Layer: Sync + Send {
 
     fn get(&self, keycode: Code) -> Option<Entry>;
 
+    /// returns true if the layer is now done with actions and the original layer can be restored
     fn run(&self, keycode: Code, editor: &mut Editor) -> bool {
         let Some(next) = self.get(keycode) else {
             return false;
@@ -388,6 +389,9 @@ static DEFAULT_NORMAL: LazyLock<Arc<dyn Layer>> = LazyLock::new(|| {
         "g":         map! {
             "g":         act::MoveBufferBeg::arc(),
             "e":         act::MoveBufferEnd::arc(),
+        },
+        "space":     map! {
+            "space":     act::FileExplorer::arc(),
         },
     }
     Arc::new(Normal(normal)) as _

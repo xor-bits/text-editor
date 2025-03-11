@@ -159,4 +159,4 @@ impl Default for Buffer {
 
 //
 
-static CONN_POOL: LazyLock<ConnectionPool> = LazyLock::new(ConnectionPool::new);
+pub static CONN_POOL: LazyLock<ConnectionPool> = LazyLock::new(ConnectionPool::new);

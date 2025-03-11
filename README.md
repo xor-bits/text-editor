@@ -33,7 +33,7 @@ text-editor ssh:user1@host1|ssh:user2@host2:file
  - [x] file editing
  - [x] remote (ssh/sudo/..) file editing
  - [x] multiple buffers
- - [ ] file picker
+ - [x] file picker
  - [ ] hex editor
  - [ ] NBT editor
  - [ ] text-editor configuration
