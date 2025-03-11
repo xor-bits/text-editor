@@ -13,8 +13,6 @@ Remote editing should work like TRAMP in Emacs.
 
 Buffers have a mode for the content type, like text, hex, NBT, or other binary formats.
 
-![image](https://github.com/user-attachments/assets/76125b4c-1795-4a58-a3bd-ea58ffbc4408)
-
 ## Example usage
 
 ```
@@ -27,6 +25,17 @@ text-editor sudo:/etc/fstab
 # connect to user1@host1 using ssh, then connect to user2@host2 from host1 and open 'file'
 text-editor ssh:user1@host1|ssh:user2@host2:file
 ```
+
+## Screenshots
+
+### normal file editing
+![image](https://github.com/user-attachments/assets/76125b4c-1795-4a58-a3bd-ea58ffbc4408)
+
+### file explorer and editor over ssh
+![image](https://github.com/user-attachments/assets/15d27e2b-8e1b-4caf-877f-b7e16dafac07)
+
+### command suggestions
+![image](https://github.com/user-attachments/assets/cfeab306-0eee-4856-8741-55b1f02c6fbd)
 
 ## TODOs
 
