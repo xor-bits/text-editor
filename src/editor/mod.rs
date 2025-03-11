@@ -296,18 +296,6 @@ impl Editor {
 
     pub fn event(&mut self, event: Event) {
         match event {
-            Event::Key(KeyEvent {
-                code: KeyCode::Esc,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            }) => {
-                if let Mode::Insert { append: true } = self.mode {
-                    self.cursor -= 1;
-                }
-                self.mode = Mode::Normal;
-                self.command.clear();
-            }
             /* Event::Key(KeyEvent {
                 code: KeyCode::Char('c'),
                 modifiers: KeyModifiers::CONTROL,
@@ -422,7 +410,7 @@ impl Editor {
             self.cursor = self
                 .cursor
                 .saturating_add_signed(delta_x)
-                .min(self.buffer.contents.len_chars() - 1);
+                .min(self.buffer.contents.len_chars());
         }
 
         // delta Y from now on
@@ -454,12 +442,7 @@ impl Editor {
 
     fn jump_line_end(&mut self) {
         let line = self.buffer.contents.char_to_line(self.cursor);
-        let line_len = self
-            .buffer
-            .contents
-            .line(line)
-            .len_chars()
-            .saturating_sub(1);
+        let line_len = self.buffer.contents.line(line).len_chars();
         self.cursor = self
             .buffer
             .contents

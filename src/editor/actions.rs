@@ -68,7 +68,7 @@ impl Action for Escape {
 
     fn run(&self, editor: &mut Editor) {
         if let Mode::Insert { append: true } = editor.mode {
-            editor.cursor -= 1;
+            editor.cursor = editor.cursor.saturating_sub(1);
         }
         editor.mode = Mode::Normal;
         editor.command.clear();
