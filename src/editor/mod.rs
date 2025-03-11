@@ -7,8 +7,8 @@ use crossterm::{
 };
 use ratatui::{
     layout::{Constraint, Layout, Position, Rect},
-    style::Style,
-    text::Line,
+    style::{Style, Stylize},
+    text::{Line, Span, Text},
     widgets::{Block, Paragraph, Widget},
     DefaultTerminal, Frame,
 };
@@ -18,7 +18,7 @@ use crate::{
     mode::{Mode, ModeSubset},
 };
 
-use self::keymap::{Code, Keymap};
+use self::keymap::{ActionEntry, Code, Keymap, DEFAULT_ACTIONS};
 
 //
 
@@ -95,9 +95,12 @@ impl Widget for Cursor<'_> {
 }
 
 pub struct LineNumbers {
+    /// viewport first line
     line: usize,
-    row: usize,
+    /// viewport line count
     lines: usize,
+    /// cursor row
+    row: usize,
 }
 
 impl Widget for LineNumbers {
@@ -130,7 +133,7 @@ impl Widget for LineNumbers {
 
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
-                if y as usize != self.row - self.line {
+                if y as usize + self.line != self.row {
                     buf[(x, y)].set_fg(theme::INACTIVE);
                 }
             }
@@ -147,6 +150,8 @@ pub struct Editor {
     pub cursor: usize,
     pub view_line: usize,
     pub command: String,
+    pub command_suggestions: Vec<ActionEntry>,
+    pub command_suggestion_index: Option<usize>,
 
     pub mode: Mode,
 
@@ -162,6 +167,8 @@ impl Editor {
             cursor: 0,
             view_line: 0,
             command: String::new(),
+            command_suggestions: Vec::new(),
+            command_suggestion_index: None,
 
             mode: Mode::Normal,
 
@@ -223,6 +230,12 @@ impl Editor {
         ])
         .areas(frame.area());
 
+        let [buffer_area, suggestion_area] = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length((self.command_suggestions.len() as u16).min(10)),
+        ])
+        .areas(buffer_area);
+
         let lines = self.buffer.contents.len_lines();
 
         let [_, line_numbers_area, _, buffer_area] = Layout::horizontal([
@@ -237,12 +250,25 @@ impl Editor {
         let col = self.cursor - self.buffer.contents.line_to_char(row);
 
         // keep the cursor within view
-        if row < self.view_line {
-            self.view_line = row;
-        }
-        if row + 3 > self.view_line + buffer_area.height as usize {
-            self.view_line = row + 3 - buffer_area.height as usize;
-        }
+        tracing::debug!(
+            "view_line={} row={row} lines={lines} buffer_area.height={}",
+            self.view_line,
+            buffer_area.height
+        );
+        self.view_line = self
+            .view_line
+            .clamp(row, (row + 3).saturating_sub(buffer_area.height as usize));
+        // if row < self.view_line {
+        //     self.view_line = row;
+        // }
+        // if row + 3 > self.view_line + buffer_area.height as usize {
+        //     self.view_line = row + 3 - buffer_area.height as usize;
+        // }
+        tracing::debug!(
+            "view_line={} row={row} lines={lines} buffer_area.height={}",
+            self.view_line,
+            buffer_area.height
+        );
 
         // render line numbers
         let line_numbers = LineNumbers {
@@ -281,10 +307,54 @@ impl Editor {
             .title(right.right_aligned())
             .style(Style::new().bg(theme::BUFFER_LINE));
         frame.render_widget(info, info_area);
-
         // let bg = Block::new().style(Style::new().bg(Color::Black));
         // frame.render_widget(bg, cmd_area);
         // frame.render_widget(self.command.as_str(), cmd_area);
+
+        let suggestion_list_chunk_start = self
+            .command_suggestion_index
+            .unwrap_or(0)
+            .checked_div(suggestion_area.height as usize)
+            .unwrap_or(0)
+            .checked_mul(suggestion_area.height as usize)
+            .unwrap_or(0);
+
+        let suggestion_bg = Block::new().style(Style::new().bg(theme::BACKGROUND_LIGHT));
+        frame.render_widget(suggestion_bg, suggestion_area);
+        for (i, act) in self
+            .command_suggestions
+            .iter()
+            .enumerate()
+            .skip(suggestion_list_chunk_start)
+            .take(suggestion_area.height as usize)
+        {
+            let (fg, bg) = if Some(i) == self.command_suggestion_index {
+                (theme::BACKGROUND_LIGHT, theme::CURSOR)
+            } else {
+                (theme::CURSOR, theme::BACKGROUND_LIGHT)
+            };
+
+            let area = Rect {
+                x: suggestion_area.x,
+                y: suggestion_area.y + (i - suggestion_list_chunk_start) as u16,
+                width: suggestion_area.width,
+                height: 1,
+            };
+
+            let suggestion = Block::new()
+                .title(
+                    Line::from_iter([act.act.description()])
+                        .right_aligned()
+                        .fg(theme::ACCENT),
+                )
+                .title(
+                    Line::from_iter([act.act.name()])
+                        .left_aligned()
+                        .fg(fg)
+                        .bg(bg),
+                );
+            frame.render_widget(suggestion, area);
+        }
 
         let cmd = Block::new()
             // .style(Style::new().bg(Color::Black))
@@ -323,13 +393,7 @@ impl Editor {
                     Mode::Action { ref layer, prev } => (layer.clone(), prev),
                 };
 
-                if layer.run(
-                    Code {
-                        keycode: code,
-                        modifiers,
-                    },
-                    self,
-                ) {
+                if layer.run(Code::from_event(code, modifiers), self) {
                     return;
                 }
 

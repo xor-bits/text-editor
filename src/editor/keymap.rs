@@ -1,7 +1,8 @@
 use core::panic;
 use std::{
     borrow::Borrow,
-    collections::{HashMap, HashSet},
+    cmp::Ordering,
+    collections::{BTreeSet, HashMap, HashSet},
     hash::Hash,
     sync::{Arc, LazyLock},
     thread,
@@ -137,11 +138,6 @@ pub trait Layer: Sync + Send {
                 };
             }
             Entry::Action(action) => {
-                tracing::debug!(
-                    "running action {} ({})",
-                    action.name(),
-                    action.description()
-                );
                 action.run(editor);
                 editor.mode = editor.mode.prev().mode();
             }
@@ -249,6 +245,7 @@ impl Layer for Command {
 
     fn run(&self, keycode: Code, editor: &mut Editor) -> bool {
         let Some(next) = self.get(keycode) else {
+            tracing::debug!("running action {}", act::TypeChar.name());
             return act::TypeChar.run(keycode, editor);
         };
 
@@ -260,6 +257,7 @@ impl Layer for Command {
                 };
             }
             Entry::Action(action) => {
+                tracing::debug!("running action {}", action.name());
                 action.run(editor);
                 editor.mode = editor.mode.prev().mode();
             }
@@ -271,14 +269,15 @@ impl Layer for Command {
 
 //
 
-pub static DEFAULT_ACTIONS: LazyLock<HashSet<ActionEntry>> = LazyLock::new(|| {
-    HashSet::from_iter(
+pub static DEFAULT_ACTIONS: LazyLock<BTreeSet<ActionEntry>> = LazyLock::new(|| {
+    BTreeSet::from_iter(
         act::all_actions()
             .into_iter()
             .map(|act| ActionEntry { act }),
     )
 });
 
+#[derive(Clone)]
 pub struct ActionEntry {
     pub act: Arc<dyn Action>,
 }
@@ -300,6 +299,18 @@ impl Hash for ActionEntry {
 impl Borrow<str> for ActionEntry {
     fn borrow(&self) -> &str {
         self.act.name()
+    }
+}
+
+impl PartialOrd for ActionEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ActionEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.act.name().cmp(other.act.name())
     }
 }
 
@@ -404,6 +415,8 @@ static DEFAULT_COMMAND: LazyLock<Arc<dyn Layer>> = LazyLock::new(|| {
     map! {
         command,
         "backspace": act::Backspace::arc(),
+        "tab":       act::NextSuggestion::arc(),
+        "S-tab":     act::PrevSuggestion::arc(),
     };
     Arc::new(Command(command)) as _
 });
@@ -435,6 +448,15 @@ pub struct Code {
 }
 
 impl Code {
+    pub const fn from_event(mut keycode: KeyCode, mut modifiers: KeyModifiers) -> Self {
+        if matches!(keycode, KeyCode::BackTab) {
+            keycode = KeyCode::Tab;
+            modifiers =
+                KeyModifiers::from_bits_truncate(modifiers.bits() | KeyModifiers::SHIFT.bits());
+        }
+        Self { keycode, modifiers }
+    }
+
     pub const fn from_str(s: &str) -> Self {
         if let Some(some) = Self::try_from_str(s) {
             some
@@ -518,6 +540,7 @@ impl Code {
             b"pagedown" => KeyCode::PageDown,
             b"home" => KeyCode::Home,
             b"end" => KeyCode::End,
+            b"tab" => KeyCode::Tab,
             [c] => KeyCode::Char(*c as char),
             _ => return None,
         };

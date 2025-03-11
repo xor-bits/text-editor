@@ -51,6 +51,9 @@ pub fn all_actions() -> impl IntoIterator<Item = Arc<dyn Action>> {
         WriteQuitForce::arc(),
         //
         ClearLog::arc(),
+        RefreshSuggestions::arc(),
+        NextSuggestion::arc(),
+        PrevSuggestion::arc(),
     ]
 }
 
@@ -74,6 +77,8 @@ impl Action for Escape {
         }
         editor.mode = Mode::Normal;
         editor.command.clear();
+        editor.command_suggestions.clear();
+        editor.command_suggestion_index = None;
     }
 }
 
@@ -437,6 +442,7 @@ impl Action for SwitchToCommand {
         editor.mode = Mode::Command;
         editor.command.clear();
         editor.command.push(':');
+        RefreshSuggestions.run(editor);
     }
 }
 
@@ -671,6 +677,7 @@ impl Action for Backspace {
             Mode::Command => {
                 if editor.command.len() >= 2 {
                     _ = editor.command.pop();
+                    RefreshSuggestions.run(editor);
                 }
             }
             _ => {}
@@ -723,9 +730,12 @@ impl Layer for TypeChar {
                     };
 
                     editor.command.clear();
+                    editor.command_suggestions.clear();
+                    editor.command_suggestion_index = None;
                     act.act.run(editor);
                 } else {
                     editor.command.push(ch);
+                    RefreshSuggestions.run(editor);
                 }
             }
             _ => {}
@@ -828,5 +838,92 @@ impl Action for ClearLog {
         if let Some(log_file) = crate::LOG_FILE.get() {
             log_file.set_len(0).unwrap();
         }
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct RefreshSuggestions;
+
+impl Action for RefreshSuggestions {
+    fn name(&self) -> &str {
+        "refresh-suggestions"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        editor.command_suggestions.clear();
+        editor.command_suggestion_index = None;
+
+        let cmd = editor
+            .command
+            .strip_prefix(":")
+            .unwrap_or(editor.command.as_str());
+        editor.command_suggestions.extend(
+            DEFAULT_ACTIONS
+                .iter()
+                .filter(|act| act.act.name().starts_with(cmd))
+                .cloned(),
+        );
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct NextSuggestion;
+
+impl Action for NextSuggestion {
+    fn name(&self) -> &str {
+        "next-suggestion"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        if editor.command_suggestions.is_empty() {
+            return;
+        }
+
+        if let Some(index) = editor.command_suggestion_index.as_mut() {
+            *index += 1;
+            *index = (*index).min(editor.command_suggestions.len() - 1);
+        };
+
+        let index = *editor.command_suggestion_index.get_or_insert(0);
+
+        editor.command.clear();
+        editor.command.push(':');
+        editor
+            .command
+            .push_str(editor.command_suggestions[index].act.name());
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct PrevSuggestion;
+
+impl Action for PrevSuggestion {
+    fn name(&self) -> &str {
+        "prev-suggestion"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        tracing::debug!("running action {}", self.name());
+
+        if editor.command_suggestions.is_empty() {
+            return;
+        }
+        if let Some(index) = editor.command_suggestion_index.as_mut() {
+            *index = (*index).saturating_sub(1);
+        }
+
+        let index = *editor.command_suggestion_index.get_or_insert(0);
+
+        editor.command.clear();
+        editor.command.push(':');
+        editor
+            .command
+            .push_str(editor.command_suggestions[index].act.name());
     }
 }
