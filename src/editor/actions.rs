@@ -790,6 +790,10 @@ impl Action for Quit {
         "q"
     }
 
+    fn description(&self) -> &str {
+        "quit without saving"
+    }
+
     fn run(&self, editor: &mut Editor) {
         // TODO: dont close if unsaved
         editor.should_close = true;
@@ -804,6 +808,10 @@ pub struct QuitForce;
 impl Action for QuitForce {
     fn name(&self) -> &str {
         "q!"
+    }
+
+    fn description(&self) -> &str {
+        "force quit without saving"
     }
 
     fn run(&self, editor: &mut Editor) {
@@ -821,6 +829,10 @@ impl Action for Write {
         "w"
     }
 
+    fn description(&self) -> &str {
+        "save"
+    }
+
     fn run(&self, editor: &mut Editor) {
         editor.current_mut().buffer.write().unwrap();
     }
@@ -834,6 +846,10 @@ pub struct WriteQuit;
 impl Action for WriteQuit {
     fn name(&self) -> &str {
         "x"
+    }
+
+    fn description(&self) -> &str {
+        "save and quit"
     }
 
     fn run(&self, editor: &mut Editor) {
@@ -853,6 +869,10 @@ impl Action for WriteQuitForce {
         "x!"
     }
 
+    fn description(&self) -> &str {
+        "save and force quit"
+    }
+
     fn run(&self, editor: &mut Editor) {
         editor.current_mut().buffer.write().unwrap();
         editor.should_close = true;
@@ -867,6 +887,10 @@ pub struct ClearLog;
 impl Action for ClearLog {
     fn name(&self) -> &str {
         "clear-log"
+    }
+
+    fn description(&self) -> &str {
+        "clear the log file"
     }
 
     fn run(&self, _: &mut Editor) {
