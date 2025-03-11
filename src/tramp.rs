@@ -146,7 +146,7 @@ impl Connection {
 
     /// just run one command and log it
     pub fn run_cmd(&mut self, cmd: fmt::Arguments) -> Result<()> {
-        // println!("running '{cmd}'");
+        tracing::trace!("running '{cmd}'");
         self.shell.writer.write_fmt(cmd)?;
         self.shell.writer.write_all(b"\n")?;
         Ok(())
@@ -154,15 +154,15 @@ impl Connection {
 
     /// wait for the prompt indicator
     pub fn wait(&mut self) -> Result<String> {
-        // println!("waiting for __sh_prompt");
+        tracing::trace!("waiting for __sh_prompt");
         Ok(self.shell.exp_string("__sh_prompt")?)
     }
 
     pub fn list_files(&mut self) -> Result<()> {
-        println!("running ls");
+        tracing::trace!("running ls");
         self.shell.send_line("ls")?;
         let read = self.shell.exp_string("__sh_prompt")?;
-        println!("got {read}");
+        tracing::trace!("got {read}");
 
         Ok(())
     }
@@ -203,7 +203,7 @@ impl Connection {
         if false {
             self.shell.send_control('d')?;
         } else {
-            // println!("running 'echo '...' | base64 -d - > {filename}'");
+            tracing::trace!("running 'echo '...' | base64 -d - > {filename}'");
             self.shell
                 .writer
                 .write_fmt(format_args!("' | base64 -d - > {filename}\n"))?;
@@ -220,7 +220,6 @@ impl Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         while self.shell.send_line("exit").is_ok() && self.shell.read_line().is_ok() {
-            // println!("{:?}", self.shell.read_line());
             // self.shell.process.kill(sig)
         }
         // self.shell.process.set_kill_timeout(Some(100));
@@ -286,7 +285,7 @@ impl ConnectionPool {
             .unwrap_or_else(|err| err.into_inner());
 
         for part in conn.remote.clone().iter() {
-            // println!("hop: {part:?}");
+            tracing::trace!("hop: {part:?}");
 
             match part {
                 Part::Ssh {
@@ -306,7 +305,7 @@ impl ConnectionPool {
             }
         }
 
-        println!("connected");
+        tracing::trace!("connected");
 
         Ok(conn)
     }
