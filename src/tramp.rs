@@ -16,6 +16,9 @@ pub enum Part {
         port: u16,
         askpw: bool,
     },
+    Docker {
+        container: Str,
+    },
     Sudo {
         askpw: bool,
     },
@@ -68,6 +71,14 @@ impl Part {
 
                 Ok(Self::Sudo { askpw })
             }
+            "docker" => {
+                let container = args
+                    .next()
+                    .ok_or_else(|| eyre!("missing docker container ID"))?;
+                let container = Str::new(pool, container);
+
+                Ok(Self::Docker { container })
+            }
             "bash" => Ok(Self::Bash {}),
             _ => bail!("unknown protocol"),
         }
@@ -111,7 +122,7 @@ impl Connection {
         // FIXME: sanitation
         _ = askpw;
         self.run_cmd_checked(format_args!(
-            "ssh -p {port} -t -t '{destination}' env PS1=__sh_prompt TERM=dumb sh --noprofile"
+            "ssh -p {port} -t -t '{destination}' env PS1=__sh_prompt TERM=dumb sh"
         ))?;
         Ok(())
     }
@@ -126,6 +137,18 @@ impl Connection {
         Ok(())
     }
 
+    pub fn hop_docker(&mut self, container: &str) -> Result<()> {
+        // FIXME: sanitation
+        self.run_cmd_checked(format_args!(
+            "docker exec -it '{container}' env PS1=__sh_prompt TERM=dumb sh"
+        ))?;
+        self.run_cmd(format_args!("stty -echoctl"))?;
+        self.run_cmd(format_args!("stty -echo"))?;
+        self.wait()?;
+        self.wait()?;
+        Ok(())
+    }
+
     /// run a command and test the exit code
     pub fn run_cmd_checked(&mut self, cmd: fmt::Arguments) -> Result<String> {
         self.run_cmd(cmd)?;
@@ -133,6 +156,7 @@ impl Connection {
 
         let result = self.wait()?;
         let exit_code = self.wait()?;
+        tracing::debug!("checked command complete");
         let exit_code = exit_code.trim();
         if exit_code != "0" {
             bail!(
@@ -203,12 +227,9 @@ impl Connection {
         if false {
             self.shell.send_control('d')?;
         } else {
-            tracing::trace!("running 'echo '...' | base64 -d - > {filename}'");
-            self.shell
-                .writer
-                .write_fmt(format_args!("' | base64 -d - > {filename}\n"))?;
+            tracing::trace!("running 'echo '...");
+            self.run_cmd_checked(format_args!("' | base64 -d - > {filename}"))?;
         }
-        self.wait()?;
         Ok(())
     }
 
@@ -300,6 +321,11 @@ impl ConnectionPool {
                 }
                 Part::Sudo { askpw } => {
                     conn.hop_sudo(*askpw)?;
+                }
+                Part::Docker { container } => {
+                    let container =
+                        &string_pool[container.start as usize..][..container.len as usize];
+                    conn.hop_docker(container)?;
                 }
                 Part::Bash {} => {}
             }
