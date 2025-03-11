@@ -343,7 +343,11 @@ impl Editor {
         let target_line = cursor_line
             .saturating_add_signed(delta_y)
             .min(buffer.contents.len_lines() - 1);
-        let target_line_len = buffer.contents.line(target_line).len_chars();
+        let target_line_len = buffer
+            .contents
+            .line(target_line)
+            .len_chars()
+            .saturating_sub(1);
 
         // place the cursor on the same X position or on the last char on the line
         let target_line_start = buffer.contents.line_to_char(target_line);
