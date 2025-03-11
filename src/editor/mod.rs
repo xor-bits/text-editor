@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, ops::Deref};
 
 use crossterm::{
     cursor::SetCursorStyle,
@@ -127,9 +127,11 @@ impl Editor {
         ])
         .areas(buffer_area);
 
-        let ((col, row), buf_name, _real_cursor) =
-            self.view
-                .render(&self.buffers, &self.mode, buffer_area, frame);
+        let ((col, row), buf_name, _real_cursor) = BufferViewMut::new(
+            &mut self.view,
+            &mut self.buffers,
+        )
+        .render(&self.mode, buffer_area, frame);
         self.real_cursor = _real_cursor;
 
         let cursor_pos = format!("{row}:{col}");
@@ -236,148 +238,120 @@ impl Editor {
         }
     }
 
-    fn current(&self) -> (&Buffer, &BufferView) {
-        (&self.buffers[self.view.buffer_index], &self.view)
+    pub fn current(&self) -> BufferViewRef<'_> {
+        BufferViewRef::new(&self.view, &self.buffers)
     }
 
-    fn current_mut(&mut self) -> (&mut Buffer, &mut BufferView) {
-        (&mut self.buffers[self.view.buffer_index], &mut self.view)
+    pub fn current_mut(&mut self) -> BufferViewMut<'_> {
+        BufferViewMut::new(&mut self.view, &mut self.buffers)
+    }
+}
+
+//
+
+pub struct BufferViewRef<'a> {
+    view: &'a BufferView,
+    buffer: &'a Buffer,
+}
+
+impl<'a> BufferViewRef<'a> {
+    pub const fn new(view: &'a BufferView, buffers: &'a [Buffer]) -> Self {
+        BufferViewRef {
+            buffer: &buffers[view.buffer_index],
+            view,
+        }
     }
 
     /// count matching characters starting and including `from`
-    fn count_matching(&self, from: usize, mut pred: impl FnMut(char) -> bool) -> usize {
-        let (buffer, _) = self.current();
-
-        buffer
-            .contents
-            .get_chars_at(from)
-            .into_iter()
-            .flatten()
-            .take_while(|ch| pred(*ch))
-            .count()
+    pub fn count_matching(&self, from: usize, pred: impl FnMut(char) -> bool) -> usize {
+        self.view.count_matching(self.buffer, from, pred)
     }
 
     /// find the next matching `pred` starting and including `from`
-    fn find(&self, from: usize, pred: impl FnMut(char) -> bool) -> Option<usize> {
-        let (buffer, _) = self.current();
-
-        buffer
-            .contents
-            .get_chars_at(from)
-            .into_iter()
-            .flatten()
-            .position(pred)
+    pub fn find(&self, from: usize, pred: impl FnMut(char) -> bool) -> Option<usize> {
+        self.view.find(self.buffer, from, pred)
     }
 
     /// reverse find the next matching `pred` starting and including `from`
-    fn rfind(&self, from: usize, pred: impl FnMut(char) -> bool) -> Option<usize> {
-        let (buffer, _) = self.current();
-
-        buffer
-            .contents
-            .get_chars_at(from + 1)
-            .map(|s| s.reversed())
-            .into_iter()
-            .flatten()
-            .position(pred)
+    pub fn rfind(&self, from: usize, pred: impl FnMut(char) -> bool) -> Option<usize> {
+        self.view.rfind(self.buffer, from, pred)
     }
 
     /// find the next word boundary starting and including `from`
-    fn find_boundary(&self, from: usize) -> usize {
-        let (buffer, _) = self.current();
-
-        buffer
-            .contents
-            .chars_at(from)
-            .scan(None, |first, ch| {
-                let ty = ch.is_alphanumeric();
-                (*first.get_or_insert(ty) == ty).then_some(())
-            })
-            .skip(1)
-            .count()
+    pub fn find_boundary(&self, from: usize) -> usize {
+        self.view.find_boundary(self.buffer, from)
     }
 
     /// reverse find the next word boundary starting and including `from`
-    fn rfind_boundary(&self, from: usize) -> usize {
-        let (buffer, _) = self.current();
-
-        buffer
-            .contents
-            .chars_at(from + 1)
-            .reversed()
-            .scan(None, |first, ch| {
-                let ty = ch.is_alphanumeric();
-                (*first.get_or_insert(ty) == ty).then_some(())
-            })
-            .skip(1)
-            .count()
+    pub fn rfind_boundary(&self, from: usize) -> usize {
+        self.view.rfind_boundary(self.buffer, from)
     }
+}
 
-    fn jump_cursor(&mut self, delta_x: isize, delta_y: isize) {
-        let (buffer, view) = self.current_mut();
+pub struct BufferViewMut<'a> {
+    view: &'a mut BufferView,
+    buffer: &'a mut Buffer,
+}
 
-        if buffer.contents.len_chars() == 0 {
-            // cant move if the buffer has nothing
-            view.cursor = 0;
-            return;
+impl<'a> BufferViewMut<'a> {
+    pub const fn new(view: &'a mut BufferView, buffers: &'a mut [Buffer]) -> Self {
+        BufferViewMut {
+            buffer: &mut buffers[view.buffer_index],
+            view,
         }
-
-        if delta_x != 0 {
-            // delta X can wrap
-            view.cursor = view
-                .cursor
-                .saturating_add_signed(delta_x)
-                .min(buffer.contents.len_chars());
-        }
-
-        // delta Y from now on
-        if delta_y == 0 || buffer.contents.len_lines() == 0 {
-            return;
-        }
-
-        // figure out what X position the cursor is moved to
-        let cursor_line = buffer.contents.char_to_line(view.cursor);
-        let line_start = buffer.contents.line_to_char(cursor_line);
-        let cursor_x = view.cursor - line_start;
-
-        let target_line = cursor_line
-            .saturating_add_signed(delta_y)
-            .min(buffer.contents.len_lines() - 1);
-        let target_line_len = buffer
-            .contents
-            .line(target_line)
-            .len_chars()
-            .saturating_sub(1);
-
-        // place the cursor on the same X position or on the last char on the line
-        let target_line_start = buffer.contents.line_to_char(target_line);
-        view.cursor = target_line_start + target_line_len.min(cursor_x);
     }
 
-    fn jump_line_beg(&mut self) {
-        let (buffer, view) = self.current_mut();
-        view.cursor = buffer
-            .contents
-            .line_to_char(buffer.contents.char_to_line(view.cursor));
+    pub fn render(
+        self,
+        mode: &Mode,
+        area: Rect,
+        frame: &mut ratatui::prelude::Frame,
+    ) -> ((usize, usize), &'a str, (usize, usize)) {
+        self.view.render(self.buffer, mode, area, frame)
     }
 
-    fn jump_line_end(&mut self) {
-        let (buffer, view) = self.current_mut();
-        let line = buffer.contents.char_to_line(view.cursor);
-        let line_len = buffer.contents.line(line).len_chars();
-        view.cursor = buffer
-            .contents
-            .len_chars()
-            .min((buffer.contents.line_to_char(line) + line_len).saturating_sub(2));
+    /// count matching characters starting and including `from`
+    pub fn count_matching(&self, from: usize, pred: impl FnMut(char) -> bool) -> usize {
+        self.view.count_matching(self.buffer, from, pred)
     }
 
-    fn jump_beg(&mut self) {
-        let (_, view) = self.current_mut();
-        view.cursor = 0;
+    /// find the next matching `pred` starting and including `from`
+    pub fn find(&self, from: usize, pred: impl FnMut(char) -> bool) -> Option<usize> {
+        self.view.find(self.buffer, from, pred)
     }
 
-    fn jump_end(&mut self) {
-        let (buffer, view) = self.current_mut();
-        view.cursor = buffer.contents.len_chars().saturating_sub(1);
+    /// reverse find the next matching `pred` starting and including `from`
+    pub fn rfind(&self, from: usize, pred: impl FnMut(char) -> bool) -> Option<usize> {
+        self.view.rfind(self.buffer, from, pred)
+    }
+
+    /// find the next word boundary starting and including `from`
+    pub fn find_boundary(&self, from: usize) -> usize {
+        self.view.find_boundary(self.buffer, from)
+    }
+
+    /// reverse find the next word boundary starting and including `from`
+    pub fn rfind_boundary(&self, from: usize) -> usize {
+        self.view.rfind_boundary(self.buffer, from)
+    }
+
+    pub fn jump_cursor(&mut self, delta_x: isize, delta_y: isize) {
+        self.view.jump_cursor(self.buffer, delta_x, delta_y);
+    }
+
+    pub fn jump_line_beg(&mut self) {
+        self.view.jump_line_beg(self.buffer);
+    }
+
+    pub fn jump_line_end(&mut self) {
+        self.view.jump_line_end(self.buffer)
+    }
+
+    pub fn jump_beg(&mut self) {
+        self.view.jump_beg()
+    }
+
+    pub fn jump_end(&mut self) {
+        self.view.jump_end(self.buffer)
     }
 }

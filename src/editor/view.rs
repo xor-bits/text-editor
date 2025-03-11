@@ -28,13 +28,11 @@ impl BufferView {
 
     pub fn render<'a>(
         &mut self,
-        buffers: &'a [Buffer],
+        buffer: &'a Buffer,
         mode: &Mode,
         area: Rect,
         frame: &mut ratatui::prelude::Frame,
     ) -> ((usize, usize), &'a str, (usize, usize)) {
-        let buffer = &buffers[self.buffer_index];
-
         let lines = buffer.contents.len_lines();
 
         let [_, line_numbers_area, _, buffer_area] = Layout::horizontal([
@@ -103,6 +101,142 @@ impl BufferView {
             buffer.lossy_name.as_ref(),
             (real_cursor_col, real_cursor_row),
         )
+    }
+
+    /// count matching characters starting and including `from`
+    pub fn count_matching(
+        &self,
+        buffer: &Buffer,
+        from: usize,
+        mut pred: impl FnMut(char) -> bool,
+    ) -> usize {
+        buffer
+            .contents
+            .get_chars_at(from)
+            .into_iter()
+            .flatten()
+            .take_while(|ch| pred(*ch))
+            .count()
+    }
+
+    /// find the next matching `pred` starting and including `from`
+    pub fn find(
+        &self,
+        buffer: &Buffer,
+        from: usize,
+        pred: impl FnMut(char) -> bool,
+    ) -> Option<usize> {
+        buffer
+            .contents
+            .get_chars_at(from)
+            .into_iter()
+            .flatten()
+            .position(pred)
+    }
+
+    /// reverse find the next matching `pred` starting and including `from`
+    pub fn rfind(
+        &self,
+        buffer: &Buffer,
+        from: usize,
+        pred: impl FnMut(char) -> bool,
+    ) -> Option<usize> {
+        buffer
+            .contents
+            .get_chars_at(from + 1)
+            .map(|s| s.reversed())
+            .into_iter()
+            .flatten()
+            .position(pred)
+    }
+
+    /// find the next word boundary starting and including `from`
+    pub fn find_boundary(&self, buffer: &Buffer, from: usize) -> usize {
+        buffer
+            .contents
+            .chars_at(from)
+            .scan(None, |first, ch| {
+                let ty = ch.is_alphanumeric();
+                (*first.get_or_insert(ty) == ty).then_some(())
+            })
+            .skip(1)
+            .count()
+    }
+
+    /// reverse find the next word boundary starting and including `from`
+    pub fn rfind_boundary(&self, buffer: &Buffer, from: usize) -> usize {
+        buffer
+            .contents
+            .chars_at(from + 1)
+            .reversed()
+            .scan(None, |first, ch| {
+                let ty = ch.is_alphanumeric();
+                (*first.get_or_insert(ty) == ty).then_some(())
+            })
+            .skip(1)
+            .count()
+    }
+
+    pub fn jump_cursor(&mut self, buffer: &Buffer, delta_x: isize, delta_y: isize) {
+        if buffer.contents.len_chars() == 0 {
+            // cant move if the buffer has nothing
+            self.cursor = 0;
+            return;
+        }
+
+        if delta_x != 0 {
+            // delta X can wrap
+            self.cursor = self
+                .cursor
+                .saturating_add_signed(delta_x)
+                .min(buffer.contents.len_chars());
+        }
+
+        // delta Y from now on
+        if delta_y == 0 || buffer.contents.len_lines() == 0 {
+            return;
+        }
+
+        // figure out what X position the cursor is moved to
+        let cursor_line = buffer.contents.char_to_line(self.cursor);
+        let line_start = buffer.contents.line_to_char(cursor_line);
+        let cursor_x = self.cursor - line_start;
+
+        let target_line = cursor_line
+            .saturating_add_signed(delta_y)
+            .min(buffer.contents.len_lines() - 1);
+        let target_line_len = buffer
+            .contents
+            .line(target_line)
+            .len_chars()
+            .saturating_sub(1);
+
+        // place the cursor on the same X position or on the last char on the line
+        let target_line_start = buffer.contents.line_to_char(target_line);
+        self.cursor = target_line_start + target_line_len.min(cursor_x);
+    }
+
+    pub fn jump_line_beg(&mut self, buffer: &Buffer) {
+        self.cursor = buffer
+            .contents
+            .line_to_char(buffer.contents.char_to_line(self.cursor));
+    }
+
+    pub fn jump_line_end(&mut self, buffer: &Buffer) {
+        let line = buffer.contents.char_to_line(self.cursor);
+        let line_len = buffer.contents.line(line).len_chars();
+        self.cursor = buffer
+            .contents
+            .len_chars()
+            .min((buffer.contents.line_to_char(line) + line_len).saturating_sub(2));
+    }
+
+    pub fn jump_beg(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn jump_end(&mut self, buffer: &Buffer) {
+        self.cursor = buffer.contents.len_chars().saturating_sub(1);
     }
 }
 

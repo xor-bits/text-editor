@@ -73,8 +73,8 @@ impl Action for Escape {
 
     fn run(&self, editor: &mut Editor) {
         if let Mode::Insert { append: true } = editor.mode {
-            let (_, view) = editor.current_mut();
-            view.cursor = view.cursor.saturating_sub(1);
+            let cur = editor.current_mut();
+            cur.view.cursor = cur.view.cursor.saturating_sub(1);
         }
         editor.mode = Mode::Normal;
         editor.command.clear();
@@ -98,7 +98,7 @@ impl Action for MoveLeft {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_cursor(-1, 0);
+        editor.current_mut().jump_cursor(-1, 0);
     }
 }
 
@@ -117,7 +117,7 @@ impl Action for MoveRight {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_cursor(1, 0);
+        editor.current_mut().jump_cursor(1, 0);
     }
 }
 
@@ -136,7 +136,7 @@ impl Action for MoveUp {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_cursor(0, -1);
+        editor.current_mut().jump_cursor(0, -1);
     }
 }
 
@@ -155,7 +155,7 @@ impl Action for MoveDown {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_cursor(0, 1);
+        editor.current_mut().jump_cursor(0, 1);
     }
 }
 
@@ -174,7 +174,8 @@ impl Action for MovePageUp {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_cursor(0, -(editor.size.1 as isize - 1))
+        let size = editor.size;
+        editor.current_mut().jump_cursor(0, -(size.1 as isize - 1))
     }
 }
 
@@ -193,7 +194,8 @@ impl Action for MovePageDown {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_cursor(0, editor.size.1 as isize - 3)
+        let size = editor.size;
+        editor.current_mut().jump_cursor(0, size.1 as isize - 3)
     }
 }
 
@@ -212,7 +214,7 @@ impl Action for MoveLineBeg {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_line_beg()
+        editor.current_mut().jump_line_beg()
     }
 }
 
@@ -231,7 +233,7 @@ impl Action for MoveLineEnd {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_line_end()
+        editor.current_mut().jump_line_end()
     }
 }
 
@@ -250,7 +252,7 @@ impl Action for MoveBufferBeg {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_beg();
+        editor.current_mut().jump_beg();
     }
 }
 
@@ -269,7 +271,7 @@ impl Action for MoveBufferEnd {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.jump_end();
+        editor.current_mut().jump_end();
     }
 }
 
@@ -288,16 +290,15 @@ impl Action for NextWordBeg {
     }
 
     fn run(&self, editor: &mut Editor) {
-        let (buffer, view) = editor.current_mut();
+        let cur = editor.current_mut();
 
-        if view.cursor + 1 >= buffer.contents.len_chars() {
+        if cur.view.cursor + 1 >= cur.buffer.contents.len_chars() {
             return;
         }
 
-        view.cursor += 1;
-        editor.current_mut().1.cursor += editor.find_boundary(editor.current().1.cursor);
-        editor.current_mut().1.cursor +=
-            editor.count_matching(editor.current().1.cursor + 1, |ch| ch.is_whitespace());
+        cur.view.cursor += 1;
+        cur.view.cursor += cur.find_boundary(cur.view.cursor);
+        cur.view.cursor += cur.count_matching(cur.view.cursor + 1, |ch| ch.is_whitespace());
     }
 }
 
@@ -316,14 +317,14 @@ impl Action for NextWordEnd {
     }
 
     fn run(&self, editor: &mut Editor) {
-        let (buffer, view) = editor.current_mut();
+        let cur = editor.current_mut();
 
-        if view.cursor + 1 >= buffer.contents.len_chars() {
+        if cur.view.cursor + 1 >= cur.buffer.contents.len_chars() {
             return;
         }
 
-        view.cursor += 1;
-        editor.current_mut().1.cursor += editor.find_boundary(editor.current().1.cursor);
+        cur.view.cursor += 1;
+        cur.view.cursor += cur.find_boundary(cur.view.cursor);
     }
 }
 
@@ -342,14 +343,14 @@ impl Action for PrevWordBeg {
     }
 
     fn run(&self, editor: &mut Editor) {
-        let (_, view) = editor.current_mut();
+        let cur = editor.current_mut();
 
-        if view.cursor == 0 {
+        if cur.view.cursor == 0 {
             return;
         }
 
-        view.cursor -= 1;
-        editor.current_mut().1.cursor -= editor.rfind_boundary(editor.current().1.cursor);
+        cur.view.cursor -= 1;
+        cur.view.cursor -= cur.rfind_boundary(cur.view.cursor);
     }
 }
 
@@ -388,7 +389,7 @@ impl Action for SwitchToInsertLineBeg {
 
     fn run(&self, editor: &mut Editor) {
         editor.mode = Mode::Insert { append: false };
-        editor.jump_line_beg();
+        editor.current_mut().jump_line_beg();
     }
 }
 
@@ -408,7 +409,7 @@ impl Action for SwitchToAppend {
 
     fn run(&self, editor: &mut Editor) {
         editor.mode = Mode::Insert { append: true };
-        editor.jump_cursor(1, 0);
+        editor.current_mut().jump_cursor(1, 0);
     }
 }
 
@@ -428,7 +429,7 @@ impl Action for SwitchToAppendLineEnd {
 
     fn run(&self, editor: &mut Editor) {
         editor.mode = Mode::Insert { append: true };
-        editor.jump_line_end();
+        editor.current_mut().jump_line_end();
     }
 }
 
@@ -470,10 +471,10 @@ impl Action for InsertLineBelow {
 
     fn run(&self, editor: &mut Editor) {
         editor.mode = Mode::Insert { append: true };
-        editor.jump_line_end();
-        let (buffer, view) = editor.current_mut();
-        buffer.contents.insert_char(view.cursor, '\n');
-        editor.jump_cursor(1, 0);
+        let mut cur = editor.current_mut();
+        cur.jump_line_end();
+        cur.buffer.contents.insert_char(cur.view.cursor, '\n');
+        cur.jump_cursor(1, 0);
     }
 }
 
@@ -493,9 +494,9 @@ impl Action for InsertLineAbove {
 
     fn run(&self, editor: &mut Editor) {
         editor.mode = Mode::Insert { append: true };
-        editor.jump_line_beg();
-        let (buffer, view) = editor.current_mut();
-        buffer.contents.insert_char(view.cursor, '\n');
+        let mut cur = editor.current_mut();
+        cur.jump_line_beg();
+        cur.buffer.contents.insert_char(cur.view.cursor, '\n');
     }
 }
 
@@ -522,9 +523,9 @@ impl Layer for JumpForwardsTo {
             return false;
         };
 
-        let (_, view) = editor.current();
-        editor.current_mut().1.cursor += editor
-            .find(view.cursor + 1, |cur_ch| cur_ch == ch)
+        let cur = editor.current_mut();
+        cur.view.cursor += cur
+            .find(cur.view.cursor + 1, |cur_ch| cur_ch == ch)
             .map_or(0, |n| n + 1);
         editor.mode = Mode::Normal;
         true
@@ -554,8 +555,9 @@ impl Layer for JumpForwardsUntil {
             return false;
         };
 
-        editor.current_mut().1.cursor += editor
-            .find(editor.current().1.cursor + 2, |cur_ch| cur_ch == ch)
+        let cur = editor.current_mut();
+        cur.view.cursor += cur
+            .find(cur.view.cursor + 2, |cur_ch| cur_ch == ch)
             .map_or(0, |n| n + 1);
         editor.mode = Mode::Normal;
         true
@@ -585,14 +587,14 @@ impl Layer for JumpBackwardsTo {
             return false;
         };
 
-        let (_, view) = editor.current();
+        let cur = editor.current_mut();
 
-        if view.cursor == 0 {
+        if cur.view.cursor == 0 {
             editor.mode = Mode::Normal;
             return false;
         }
-        editor.current_mut().1.cursor -= editor
-            .rfind(view.cursor - 1, |cur_ch| cur_ch == ch)
+        cur.view.cursor -= cur
+            .rfind(cur.view.cursor - 1, |cur_ch| cur_ch == ch)
             .map_or(0, |n| n + 1);
         editor.mode = Mode::Normal;
         true
@@ -622,14 +624,14 @@ impl Layer for JumpBackwardsUntil {
             return false;
         };
 
-        let (_, view) = editor.current();
+        let cur = editor.current_mut();
 
-        if view.cursor <= 1 {
+        if cur.view.cursor <= 1 {
             editor.mode = Mode::Normal;
             return false;
         }
-        editor.current_mut().1.cursor -= editor
-            .rfind(view.cursor - 2, |cur_ch| cur_ch == ch)
+        cur.view.cursor -= cur
+            .rfind(cur.view.cursor - 2, |cur_ch| cur_ch == ch)
             .map_or(0, |n| n + 1);
         editor.mode = Mode::Normal;
         true
@@ -651,12 +653,15 @@ impl Action for Delete {
     }
 
     fn run(&self, editor: &mut Editor) {
-        let (buffer, view) = editor.current_mut();
-        if view.cursor == 0 {
+        let cur = editor.current_mut();
+        if cur.view.cursor == 0 {
             return;
         }
 
-        _ = buffer.contents.try_remove(view.cursor..view.cursor + 1);
+        _ = cur
+            .buffer
+            .contents
+            .try_remove(cur.view.cursor..cur.view.cursor + 1);
     }
 }
 
@@ -677,13 +682,15 @@ impl Action for Backspace {
     fn run(&self, editor: &mut Editor) {
         match editor.mode {
             Mode::Insert { .. } => {
-                let (buffer, view) = editor.current_mut();
-                if view.cursor == 0 {
+                let mut cur = editor.current_mut();
+                if cur.view.cursor == 0 {
                     return;
                 }
 
-                buffer.contents.remove(view.cursor - 1..view.cursor);
-                editor.jump_cursor(-1, 0);
+                cur.buffer
+                    .contents
+                    .remove(cur.view.cursor - 1..cur.view.cursor);
+                cur.jump_cursor(-1, 0);
             }
             Mode::Command => {
                 if editor.command.len() >= 2 {
@@ -725,9 +732,9 @@ impl Layer for TypeChar {
 
         match editor.mode {
             Mode::Insert { .. } => {
-                let (buffer, view) = editor.current_mut();
-                buffer.contents.insert_char(view.cursor, ch);
-                editor.jump_cursor(1, 0);
+                let mut cur = editor.current_mut();
+                cur.buffer.contents.insert_char(cur.view.cursor, ch);
+                cur.jump_cursor(1, 0);
             }
             Mode::Command => {
                 if ch == '\n' {
@@ -799,7 +806,7 @@ impl Action for Write {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.current_mut().0.write().unwrap();
+        editor.current_mut().buffer.write().unwrap();
     }
 }
 
@@ -815,7 +822,7 @@ impl Action for WriteQuit {
 
     fn run(&self, editor: &mut Editor) {
         // TODO: dont close if unsaved
-        editor.current_mut().0.write().unwrap();
+        editor.current_mut().buffer.write().unwrap();
         editor.should_close = true;
     }
 }
@@ -831,7 +838,7 @@ impl Action for WriteQuitForce {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.current_mut().0.write().unwrap();
+        editor.current_mut().buffer.write().unwrap();
         editor.should_close = true;
     }
 }
