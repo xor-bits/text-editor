@@ -40,7 +40,7 @@ text-editor ssh:user1@host1|ssh:user2@host2:file
 ## TODOs
 
  - [x] file editing
- - [x] remote (ssh/sudo/..) file editing
+ - [x] remote (ssh/sudo/docker/..) file editing
  - [x] multiple buffers
  - [x] file picker
  - [ ] SSH/sudo askpass somehow
