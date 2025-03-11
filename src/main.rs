@@ -1,7 +1,9 @@
 use std::{
     env,
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
 };
 
 use self::{args::Args, buffer::Buffer, editor::Editor};
@@ -48,20 +50,24 @@ fn logger_init() -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file_path)?;
+
+    _ = LOG_FILE.set(log_file.try_clone()?);
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(log_file_path)?,
-        )
+        .with_writer(log_file)
         .init();
 
     tracing::debug!("logger init");
 
     Ok(())
 }
+
+static LOG_FILE: OnceLock<File> = OnceLock::new();
 
 struct AlternativeScreenGuard;
 

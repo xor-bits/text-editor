@@ -49,6 +49,8 @@ pub fn all_actions() -> impl IntoIterator<Item = Arc<dyn Action>> {
         Write::arc(),
         WriteQuit::arc(),
         WriteQuitForce::arc(),
+        //
+        ClearLog::arc(),
     ]
 }
 
@@ -809,5 +811,22 @@ impl Action for WriteQuitForce {
     fn run(&self, editor: &mut Editor) {
         editor.buffer.write().unwrap();
         editor.should_close = true;
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct ClearLog;
+
+impl Action for ClearLog {
+    fn name(&self) -> &str {
+        "clear-log"
+    }
+
+    fn run(&self, _: &mut Editor) {
+        if let Some(log_file) = crate::LOG_FILE.get() {
+            log_file.set_len(0).unwrap();
+        }
     }
 }
