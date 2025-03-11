@@ -1,4 +1,4 @@
-use std::{cell::RefCell, cmp::Ordering, rc::Rc};
+use std::cmp::Ordering;
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},

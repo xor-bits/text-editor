@@ -1,5 +1,3 @@
-use std::{cmp::Ordering, ops::Deref};
-
 use crossterm::{
     cursor::SetCursorStyle,
     event::{self, Event, KeyEvent, KeyEventKind},
@@ -9,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Layout, Position, Rect},
     style::{Style, Stylize},
     text::Line,
-    widgets::{Block, Paragraph, Widget},
+    widgets::Block,
     DefaultTerminal, Frame,
 };
 
