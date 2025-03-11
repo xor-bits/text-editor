@@ -2,13 +2,13 @@ use std::cmp::Ordering;
 
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{self, Event, KeyEvent, KeyEventKind},
     execute, terminal,
 };
 use ratatui::{
     layout::{Constraint, Layout, Position, Rect},
     style::{Style, Stylize},
-    text::{Line, Span, Text},
+    text::Line,
     widgets::{Block, Paragraph, Widget},
     DefaultTerminal, Frame,
 };
@@ -18,7 +18,7 @@ use crate::{
     mode::{Mode, ModeSubset},
 };
 
-use self::keymap::{ActionEntry, Code, Keymap, DEFAULT_ACTIONS};
+use self::keymap::{ActionEntry, Code, Keymap};
 
 //
 

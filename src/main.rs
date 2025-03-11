@@ -1,9 +1,8 @@
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io::Write,
-    path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    path::PathBuf,
+    sync::OnceLock,
 };
 
 use self::{args::Args, buffer::Buffer, editor::Editor};
