@@ -98,7 +98,7 @@ impl BufferView {
 
         (
             (col, row),
-            buffer.lossy_name.as_ref(),
+            buffer.name.as_ref(),
             (real_cursor_col, real_cursor_row),
         )
     }

@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     fs,
     io::{self, Seek},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, LazyLock},
 };
 
@@ -15,7 +15,7 @@ use crate::tramp::{ConnectionPool, Part};
 
 pub struct Buffer {
     pub contents: Rope,
-    pub lossy_name: Cow<'static, str>,
+    pub name: Cow<'static, str>,
     /// where the buffer is stored, if it even is
     pub inner: BufferInner,
 }
@@ -31,7 +31,7 @@ impl Buffer {
     pub fn new() -> Self {
         Self {
             contents: Rope::new(),
-            lossy_name: Cow::Borrowed("[scratch]"),
+            name: Cow::Borrowed("[scratch]"),
             inner: BufferInner::Scratch,
         }
     }
@@ -40,12 +40,12 @@ impl Buffer {
         if let Some((parts, file)) = path.rsplit_once(':') {
             Ok(Self::open_remote(parts, file)?)
         } else {
-            Ok(Self::open_local(path.as_ref())?)
+            Ok(Self::open_local(path)?)
         }
     }
 
     pub fn open_remote(parts: &str, path: &str) -> Result<Self> {
-        let lossy_name = path.to_string().into();
+        let name = path.to_string().into();
 
         let mut conn = CONN_POOL.connect(parts)?;
         let file = conn.read_file(path)?;
@@ -55,13 +55,13 @@ impl Buffer {
 
         Ok(Self {
             contents,
-            lossy_name,
+            name,
             inner: BufferInner::Remote { remote },
         })
     }
 
-    pub fn open_local(path: &Path) -> Result<Self> {
-        let lossy_name = path.to_string_lossy().to_string().into();
+    pub fn open_local(path: &str) -> Result<Self> {
+        let name = path.to_string().into();
 
         // first try opening in RW mode
         match fs::OpenOptions::new()
@@ -75,7 +75,7 @@ impl Buffer {
             Ok(file) => {
                 return Ok(Self {
                     contents: Rope::from_reader(&file)?,
-                    lossy_name,
+                    name,
                     inner: BufferInner::File {
                         inner: file,
                         readonly: false,
@@ -96,7 +96,7 @@ impl Buffer {
             Ok(file) => {
                 return Ok(Self {
                     contents: Rope::from_reader(&file)?,
-                    lossy_name,
+                    name,
                     inner: BufferInner::File {
                         inner: file,
                         readonly: true,
@@ -108,7 +108,7 @@ impl Buffer {
         // finally open it as a new file, without creating the file yet
         Ok(Self {
             contents: Rope::new(),
-            lossy_name,
+            name,
             inner: BufferInner::NewFile { inner: path.into() },
         })
     }
@@ -137,9 +137,9 @@ impl Buffer {
             }
             BufferInner::Remote { ref remote } => {
                 let mut conn = CONN_POOL.connect_to(remote.clone())?;
-                let writer = conn.write_file(&self.lossy_name)?;
+                let writer = conn.write_file(&self.name)?;
                 self.contents.write_to(writer)?;
-                conn.finish_write_file(&self.lossy_name)?;
+                conn.finish_write_file(&self.name)?;
                 CONN_POOL.recycle(conn);
             }
             BufferInner::Scratch => {}

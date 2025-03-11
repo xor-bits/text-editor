@@ -3,7 +3,11 @@ use std::sync::Arc;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::{
-    editor::keymap::{Code, Entry, Layer},
+    buffer::Buffer,
+    editor::{
+        keymap::{Code, Entry, Layer},
+        view::BufferView,
+    },
     mode::Mode,
 };
 
@@ -54,6 +58,11 @@ pub fn all_actions() -> impl IntoIterator<Item = Arc<dyn Action>> {
         RefreshSuggestions::arc(),
         NextSuggestion::arc(),
         PrevSuggestion::arc(),
+        //
+        Open::arc(),
+        BufferClose::arc(),
+        BufferNext::arc(),
+        BufferPrev::arc(),
     ]
 }
 
@@ -740,18 +749,23 @@ impl Layer for TypeChar {
                 if ch == '\n' {
                     editor.mode = Mode::Normal;
 
-                    let Some(act) =
-                        DEFAULT_ACTIONS.get(editor.command.as_str().trim_start_matches(':'))
-                    else {
+                    let command_name = editor.command.as_str().trim_start_matches(':');
+                    // remove arguments
+                    let command_name = command_name
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or(command_name);
+
+                    let Some(act) = DEFAULT_ACTIONS.get(command_name) else {
                         editor.command.clear();
                         editor.command.push_str("invalid command");
                         return true;
                     };
 
+                    act.act.run(editor);
                     editor.command.clear();
                     editor.command_suggestions.clear();
                     editor.command_suggestion_index = None;
-                    act.act.run(editor);
                 } else {
                     editor.command.push(ch);
                     RefreshSuggestions.run(editor);
@@ -944,5 +958,112 @@ impl Action for PrevSuggestion {
         editor
             .command
             .push_str(editor.command_suggestions[index].act.name());
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct Open;
+
+impl Action for Open {
+    fn name(&self) -> &str {
+        "open"
+    }
+
+    fn description(&self) -> &str {
+        "open a file, takes a path argument"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        let Some(path) = editor.command.split_whitespace().nth(1) else {
+            tracing::error!("`open` is missing path argument");
+            return;
+        };
+
+        // look for existing open buffers
+        for (i, existing) in editor.buffers.iter().enumerate() {
+            if existing.name.as_ref() == path {
+                editor.view = BufferView::new(i);
+                return;
+            }
+        }
+
+        match Buffer::open(path) {
+            Ok(buf) => {
+                let idx = editor.buffers.len();
+                editor.buffers.push(buf);
+                editor.view = BufferView::new(idx);
+            }
+            Err(err) => tracing::error!("failed to open `{path}`: {err}"),
+        }
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct BufferClose;
+
+impl Action for BufferClose {
+    fn name(&self) -> &str {
+        "buffer-close"
+    }
+
+    fn description(&self) -> &str {
+        "close the current buffer"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        // FIXME: warn about saving
+        if editor.buffers.len() == 1 {
+            editor.buffers.clear();
+            editor.buffers.push(Buffer::new());
+            editor.view.buffer_index = 0;
+            return;
+        }
+
+        editor.buffers.pop();
+        editor.view.buffer_index = editor.view.buffer_index.min(editor.buffers.len() - 1);
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct BufferNext;
+
+impl Action for BufferNext {
+    fn name(&self) -> &str {
+        "buffer-next"
+    }
+
+    fn description(&self) -> &str {
+        "go to the next buffer"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        editor.view.buffer_index += 1;
+        editor.view.buffer_index %= editor.buffers.len();
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct BufferPrev;
+
+impl Action for BufferPrev {
+    fn name(&self) -> &str {
+        "buffer-prev"
+    }
+
+    fn description(&self) -> &str {
+        "go to the previous buffer"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        editor.view.buffer_index += 1;
+        editor.view.buffer_index %= editor.buffers.len();
     }
 }
