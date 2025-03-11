@@ -38,14 +38,14 @@ impl Buffer {
 
     pub fn open(path: &str) -> Result<Self> {
         if let Some((parts, file)) = path.rsplit_once(':') {
-            Ok(Self::open_remote(parts, file)?)
+            Ok(Self::open_remote(parts, file, path)?)
         } else {
             Ok(Self::open_local(path)?)
         }
     }
 
-    pub fn open_remote(parts: &str, path: &str) -> Result<Self> {
-        let name = path.to_string().into();
+    pub fn open_remote(parts: &str, path: &str, name: &str) -> Result<Self> {
+        let name = name.to_string().into();
 
         let mut conn = CONN_POOL.connect(parts)?;
         let file = conn.read_file(path)?;
@@ -136,10 +136,12 @@ impl Buffer {
                 self.contents.write_to(new_file)?;
             }
             BufferInner::Remote { ref remote } => {
+                let (_, filename) = self.name.rsplit_once(':').unwrap();
+
                 let mut conn = CONN_POOL.connect_to(remote.clone())?;
-                let writer = conn.write_file(&self.name)?;
+                let writer = conn.write_file(filename)?;
                 self.contents.write_to(writer)?;
-                conn.finish_write_file(&self.name)?;
+                conn.finish_write_file(filename)?;
                 CONN_POOL.recycle(conn);
             }
             BufferInner::Scratch => {}
