@@ -545,6 +545,7 @@ impl Code {
             KeyCode::Home => b"home",
             KeyCode::End => b"end",
             KeyCode::Tab => b"tab",
+            KeyCode::Enter => b"enter",
             KeyCode::Char(' ') => b"space",
             KeyCode::Char(c) => {
                 len += c.encode_utf8(&mut buf[len..]).len();
@@ -653,6 +654,7 @@ impl Code {
             b"home" => KeyCode::Home,
             b"end" => KeyCode::End,
             b"tab" => KeyCode::Tab,
+            b"enter" => KeyCode::Enter,
             [c] => KeyCode::Char(*c as char),
             _ => return None,
         };

@@ -48,6 +48,9 @@ pub struct Editor {
     pub command_suggestions: Vec<ActionEntry>,
     pub command_suggestion_index: Option<usize>,
 
+    pub status: String,
+    pub status_is_error: bool,
+
     pub mode: Mode,
     pub force_whichkey: bool,
 
@@ -69,6 +72,9 @@ impl Editor {
             command: String::new(),
             command_suggestions: Vec::new(),
             command_suggestion_index: None,
+
+            status: String::new(),
+            status_is_error: false,
 
             mode: Mode::Normal,
             force_whichkey: false,
@@ -200,11 +206,26 @@ impl Editor {
     }
 
     fn render_cmdline(&mut self, area: Rect, frame: &mut Frame) {
-        let cmd = Block::new()
-            // .style(Style::new().bg(Color::Black))
-            .title(self.command.as_str());
-        frame.render_widget(cmd, area);
-        // frame.render_widget(Block::new().title("cmd area"), cmd_area);
+        if !self.command.is_empty() {
+            let cmd = Block::new()
+                // .style(Style::new().bg(Color::Black))
+                .title(self.command.as_str());
+            frame.render_widget(cmd, area);
+            // frame.render_widget(Block::new().title("cmd area"), cmd_area);
+            return;
+        }
+
+        if !self.status.is_empty() {
+            let status = Block::new()
+                // .style(Style::new().bg(Color::Black))
+                .title(self.status.as_str())
+                .style(Style::new().fg(if self.status_is_error {
+                    Color::Red
+                } else {
+                    Color::Reset
+                }));
+            frame.render_widget(status, area);
+        }
     }
 
     fn render_popups(&mut self, area: Rect, frame: &mut Frame) {
@@ -285,6 +306,7 @@ impl Editor {
 
     pub fn event(&mut self, event: Event) {
         self.force_whichkey = false;
+        self.status.clear();
 
         // tracing::debug!("ev {event:?}");
         if tracing::enabled!(tracing::Level::DEBUG) {

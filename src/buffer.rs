@@ -18,13 +18,14 @@ pub struct Buffer {
     pub name: Cow<'static, str>,
     /// where the buffer is stored, if it even is
     pub inner: BufferInner,
+    pub modified: bool,
 }
 
 pub enum BufferInner {
     File { inner: fs::File, readonly: bool },
     NewFile { inner: PathBuf },
     Remote { remote: Arc<[Part]> },
-    Scratch,
+    Scratch { show_welcome: bool },
 }
 
 impl Buffer {
@@ -32,7 +33,19 @@ impl Buffer {
         Self {
             contents: Rope::new(),
             name: Cow::Borrowed("[scratch]"),
-            inner: BufferInner::Scratch,
+            inner: BufferInner::Scratch {
+                show_welcome: false,
+            },
+            modified: false,
+        }
+    }
+
+    pub fn new_welcome() -> Self {
+        Self {
+            contents: Rope::new(),
+            name: Cow::Borrowed("[scratch]"),
+            inner: BufferInner::Scratch { show_welcome: true },
+            modified: false,
         }
     }
 
@@ -57,6 +70,7 @@ impl Buffer {
             contents,
             name,
             inner: BufferInner::Remote { remote },
+            modified: false,
         })
     }
 
@@ -80,6 +94,7 @@ impl Buffer {
                         inner: file,
                         readonly: false,
                     },
+                    modified: false,
                 })
             }
         };
@@ -101,6 +116,7 @@ impl Buffer {
                         inner: file,
                         readonly: true,
                     },
+                    modified: false,
                 })
             }
         };
@@ -110,6 +126,7 @@ impl Buffer {
             contents: Rope::new(),
             name,
             inner: BufferInner::NewFile { inner: path.into() },
+            modified: false,
         })
     }
 
@@ -144,8 +161,15 @@ impl Buffer {
                 conn.finish_write_file(filename)?;
                 CONN_POOL.recycle(conn);
             }
-            BufferInner::Scratch => {}
+            BufferInner::Scratch {
+                ref mut show_welcome,
+            } => {
+                *show_welcome = false;
+                bail!("no file path set");
+            }
         };
+
+        self.modified = false;
 
         Ok(())
     }

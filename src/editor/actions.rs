@@ -488,6 +488,7 @@ impl Action for InsertLineBelow {
         let mut cur = editor.current_mut();
         cur.jump_line_end();
         cur.buffer.contents.insert_char(cur.view.cursor, '\n');
+        cur.buffer.modified = true;
         cur.jump_cursor(1, 0);
     }
 }
@@ -511,6 +512,7 @@ impl Action for InsertLineAbove {
         let mut cur = editor.current_mut();
         cur.jump_line_beg();
         cur.buffer.contents.insert_char(cur.view.cursor, '\n');
+        cur.buffer.modified = true;
     }
 }
 
@@ -700,10 +702,14 @@ impl Action for Delete {
             return;
         }
 
-        _ = cur
+        if cur
             .buffer
             .contents
-            .try_remove(cur.view.cursor..cur.view.cursor + 1);
+            .try_remove(cur.view.cursor..cur.view.cursor + 1)
+            .is_ok()
+        {
+            cur.buffer.modified = true;
+        }
     }
 }
 
@@ -732,6 +738,7 @@ impl Action for Backspace {
                 cur.buffer
                     .contents
                     .remove(cur.view.cursor - 1..cur.view.cursor);
+                cur.buffer.modified = true;
                 cur.jump_cursor(-1, 0);
             }
             Mode::Command => {
@@ -788,6 +795,7 @@ impl Layer for TypeChar {
             Mode::Insert { .. } => {
                 let mut cur = editor.current_mut();
                 cur.buffer.contents.insert_char(cur.view.cursor, ch);
+                cur.buffer.modified = true;
                 cur.jump_cursor(1, 0);
             }
             Mode::Command => {
@@ -838,7 +846,13 @@ impl Action for Quit {
     }
 
     fn run(&self, editor: &mut Editor) {
-        // TODO: dont close if unsaved
+        if editor.current().buffer.modified {
+            editor.status_is_error = true;
+            editor.status.clear();
+            editor.status.push_str("unsaved changes");
+            return;
+        }
+
         editor.should_close = true;
     }
 }
@@ -877,7 +891,12 @@ impl Action for Write {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.current_mut().buffer.write().unwrap();
+        if let Err(err) = editor.current_mut().buffer.write() {
+            editor.status_is_error = true;
+            editor.status.clear();
+            use std::fmt::Write;
+            _ = write!(&mut editor.status, "{err}");
+        }
     }
 }
 
@@ -896,8 +915,19 @@ impl Action for WriteQuit {
     }
 
     fn run(&self, editor: &mut Editor) {
-        // TODO: dont close if unsaved
-        editor.current_mut().buffer.write().unwrap();
+        if !editor.current().buffer.modified {
+            editor.should_close = true;
+            return;
+        }
+
+        if let Err(err) = editor.current_mut().buffer.write() {
+            editor.status_is_error = true;
+            editor.status.clear();
+            use std::fmt::Write;
+            _ = write!(&mut editor.status, "{err}");
+            return;
+        }
+
         editor.should_close = true;
     }
 }
@@ -917,7 +947,14 @@ impl Action for WriteQuitForce {
     }
 
     fn run(&self, editor: &mut Editor) {
-        editor.current_mut().buffer.write().unwrap();
+        if let Err(err) = editor.current_mut().buffer.write() {
+            editor.status_is_error = true;
+            editor.status.clear();
+            use std::fmt::Write;
+            _ = write!(&mut editor.status, "{err}");
+            return;
+        }
+
         editor.should_close = true;
     }
 }
@@ -1069,7 +1106,13 @@ impl Action for BufferClose {
     }
 
     fn run(&self, editor: &mut Editor) {
-        // FIXME: warn about saving
+        if editor.current().buffer.modified {
+            editor.status_is_error = true;
+            editor.status.clear();
+            editor.status.push_str("unsaved changes");
+            return;
+        }
+
         if editor.buffers.len() == 1 {
             editor.buffers.clear();
             editor.buffers.push(Buffer::new());
@@ -1156,7 +1199,7 @@ impl Action for FileExplorer {
                 path.pop();
                 (path, Some(remote.clone()))
             }
-            BufferInner::Scratch => (env::current_dir().unwrap(), None),
+            BufferInner::Scratch { .. } => (env::current_dir().unwrap(), None),
         };
 
         match Popup::file_explorer(remote, at) {
