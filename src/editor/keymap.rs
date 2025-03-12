@@ -392,6 +392,7 @@ static DEFAULT_NORMAL: LazyLock<Arc<dyn Layer>> = LazyLock::new(|| {
         },
         "space":     map! {
             "space":     act::FileExplorer::arc(),
+            "b":         act::BufferPicker::arc(),
         },
     }
     Arc::new(Normal(normal)) as _

@@ -10,9 +10,12 @@ use ratatui::{
     Frame,
 };
 
-use crate::{buffer::CONN_POOL, tramp::Part};
+use crate::{
+    buffer::{Buffer, CONN_POOL},
+    tramp::Part,
+};
 
-use super::{theme, Editor};
+use super::{theme, view::BufferView, Editor};
 
 //
 
@@ -22,6 +25,9 @@ pub enum Popup {
         files: Vec<(Cow<'static, str>, bool)>,
         remote: Option<Arc<[Part]>>,
         cwd: PathBuf,
+        selected: usize,
+    },
+    BufferPicker {
         selected: usize,
     },
     #[default]
@@ -82,7 +88,11 @@ impl Popup {
         })
     }
 
-    pub fn render(&mut self, area: Rect, frame: &mut Frame) {
+    pub fn buffer_picker(current: usize) -> Self {
+        Self::BufferPicker { selected: current }
+    }
+
+    pub fn render(&mut self, buffers: &[Buffer], area: Rect, frame: &mut Frame) {
         match self {
             Popup::FileExplorer {
                 files,
@@ -147,6 +157,44 @@ impl Popup {
                     }
                 }
             }
+            Popup::BufferPicker { selected } => {
+                let block = Block::bordered()
+                    .title("Buffer picker")
+                    .style(Style::new().bg(theme::BACKGROUND));
+                frame.render_widget(Clear, area);
+                frame.render_widget(block, area);
+
+                let area = area.inner(Margin {
+                    horizontal: 1,
+                    vertical: 1,
+                });
+
+                let chunk_start = (*selected)
+                    .checked_div(area.height as usize)
+                    .unwrap_or(0)
+                    .checked_mul(area.height as usize)
+                    .unwrap_or(0);
+                let chunk_len = area.height as usize;
+
+                for ((i, buffer), area) in buffers
+                    .iter()
+                    .enumerate()
+                    .skip(chunk_start)
+                    .take(chunk_len)
+                    .zip(area.rows())
+                {
+                    let mut bg = theme::BACKGROUND;
+                    let mut fg = theme::CURSOR;
+
+                    if *selected == i {
+                        (fg, bg) = (bg, fg);
+                    }
+
+                    let entry =
+                        Line::from_iter([buffer.name.as_ref()]).style(Style::new().fg(fg).bg(bg));
+                    frame.render_widget(entry, area);
+                }
+            }
             Popup::None => {}
         }
     }
@@ -195,12 +243,7 @@ impl Popup {
                     }
                 }
                 Event::Key(KeyEvent {
-                    code: KeyCode::Right,
-                    kind: KeyEventKind::Press,
-                    ..
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Enter,
+                    code: KeyCode::Right | KeyCode::Enter,
                     kind: KeyEventKind::Press,
                     ..
                 }) => {
@@ -229,6 +272,38 @@ impl Popup {
                             }
                         }
                     }
+                }
+                _ => self,
+            },
+            Popup::BufferPicker { selected } => match event {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Up,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    *selected = (*selected + editor.buffers.len() - 1) % editor.buffers.len();
+                    self
+                }
+                Event::Key(KeyEvent {
+                    code: KeyCode::Down,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    *selected = (*selected + 1) % editor.buffers.len();
+                    self
+                }
+                Event::Key(KeyEvent {
+                    code: KeyCode::Left | KeyCode::Esc,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => Popup::None,
+                Event::Key(KeyEvent {
+                    code: KeyCode::Right | KeyCode::Enter,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    editor.view = BufferView::new(*selected);
+                    Popup::None
                 }
                 _ => self,
             },

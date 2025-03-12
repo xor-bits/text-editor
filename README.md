@@ -43,7 +43,7 @@ text-editor ssh:user1@host1|ssh:user2@host2:file
  - [x] remote (ssh/sudo/docker/..) file editing
  - [x] multiple buffers
  - [x] file picker
- - [ ] buffer picker
+ - [x] buffer picker
  - [ ] SSH/sudo askpass somehow
  - [ ] hex editor
  - [ ] NBT editor

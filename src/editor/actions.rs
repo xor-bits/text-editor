@@ -1126,3 +1126,18 @@ impl Action for FileExplorer {
         }
     }
 }
+
+//
+
+#[derive(Debug, Default)]
+pub struct BufferPicker;
+
+impl Action for BufferPicker {
+    fn name(&self) -> &str {
+        "buffer-picker"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        editor.popup = Popup::buffer_picker(editor.view.buffer_index);
+    }
+}

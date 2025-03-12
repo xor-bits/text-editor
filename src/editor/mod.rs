@@ -206,7 +206,7 @@ impl Editor {
             horizontal: (buffer_area.width as f32 * 0.1) as u16,
             vertical: (buffer_area.height as f32 * 0.1) as u16,
         });
-        self.popup.render(popup_area, frame);
+        self.popup.render(&self.buffers, popup_area, frame);
 
         // frame.render_widget(Block::new().title("cmd area"), cmd_area);
     }
