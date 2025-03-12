@@ -1,4 +1,4 @@
-use std::mem;
+use std::{borrow::Cow, mem};
 
 use crossterm::{
     cursor::SetCursorStyle,
@@ -7,7 +7,7 @@ use crossterm::{
 };
 use ratatui::{
     layout::{Constraint, Layout, Margin, Position, Rect},
-    style::{Style, Stylize},
+    style::{Color, Style, Stylize},
     text::Line,
     widgets::{Block, Clear},
     DefaultTerminal, Frame,
@@ -49,6 +49,7 @@ pub struct Editor {
     pub command_suggestion_index: Option<usize>,
 
     pub mode: Mode,
+    pub force_whichkey: bool,
 
     pub keymap: Keymap,
 }
@@ -70,6 +71,7 @@ impl Editor {
             command_suggestion_index: None,
 
             mode: Mode::Normal,
+            force_whichkey: false,
 
             keymap: Keymap::load(),
         }
@@ -138,6 +140,9 @@ impl Editor {
 
         // render popups like the file explorer or buffer picker
         self.render_popups(buffer_area, frame);
+
+        // render a keymapping layer helper
+        self.render_whichkey(buffer_area, frame);
     }
 
     fn render_cmd_suggestions(&mut self, area: Rect, frame: &mut Frame) {
@@ -212,7 +217,90 @@ impl Editor {
         self.popup.render(&self.buffers, popup_area, frame);
     }
 
+    fn render_whichkey(&mut self, area: Rect, frame: &mut Frame) {
+        let layer = if let Mode::Action { layer, .. } = &self.mode {
+            layer.clone()
+        } else if self.force_whichkey {
+            match self.mode {
+                Mode::Normal => self.keymap.normal(),
+                Mode::Insert { .. } => self.keymap.insert(),
+                Mode::Command => self.keymap.command(),
+                Mode::Action { ref layer, .. } => layer.clone(),
+            }
+        } else {
+            return;
+        };
+
+        let entries = layer.entries();
+        let wildcard = layer.wildcard();
+
+        let width = entries
+            .iter()
+            .map(|(code, entry)| {
+                code.as_str(&mut [const { 0 }; 16]).len() + 1 + entry.description().len()
+            })
+            .max()
+            .unwrap_or(0)
+            .max(wildcard.map_or(0, |desc| 2 + desc.description().len()));
+        // .max(layer.description().len());
+
+        let height = entries.len() + wildcard.is_some() as usize /* + 1 */;
+
+        let [_, area] =
+            Layout::horizontal([Constraint::Percentage(100), Constraint::Min(width as _)])
+                .areas(area);
+        let [_, area, _] = Layout::vertical([
+            Constraint::Percentage(100),
+            Constraint::Min(height as _),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Block::new()
+                // .title(layer.description())
+                .style(Style::new().bg(theme::BACKGROUND_LIGHT)),
+            area,
+        );
+
+        for ((key_name, action_name), area) in wildcard
+            .into_iter()
+            .map(|wildcard_description| (Cow::Borrowed("*"), wildcard_description.description()))
+            .chain(entries.iter().map(|(code, entry)| {
+                let key = code.as_str(&mut [const { 0 }; 16]).to_string().into();
+                let entry = entry.description();
+                (key, entry)
+            }))
+            .zip(area.rows() /*.skip(1)*/)
+        {
+            let action_name = Line::from_iter([action_name])
+                .right_aligned()
+                .style(Style::new().fg(theme::ACCENT));
+            let key_name = Line::from_iter([key_name]).left_aligned().fg(Color::Reset);
+            let line = Block::new().title(action_name).title(key_name);
+            frame.render_widget(line, area);
+        }
+    }
+
     pub fn event(&mut self, event: Event) {
+        self.force_whichkey = false;
+
+        // tracing::debug!("ev {event:?}");
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            if let Event::Key(KeyEvent {
+                code,
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            }) = event
+            {
+                let mut buf = [const { 0 }; 16];
+                let key_name = Code::from_event(code, modifiers).as_str(&mut buf);
+                tracing::debug!("pressed '{key_name}'");
+            }
+        }
+
         if !matches!(self.popup, Popup::None) {
             self.popup = mem::take(&mut self.popup).event(self, &event);
             return;

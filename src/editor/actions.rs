@@ -65,6 +65,9 @@ pub fn all_actions() -> impl IntoIterator<Item = Arc<dyn Action>> {
         BufferPrev::arc(),
         //
         FileExplorer::arc(),
+        BufferPicker::arc(),
+        //
+        WhichKey::arc(),
     ]
 }
 
@@ -529,6 +532,10 @@ impl Layer for JumpForwardsTo {
         None
     }
 
+    fn entries(&self) -> Arc<[(Code, Entry)]> {
+        <_>::default()
+    }
+
     fn run(&self, keycode: Code, editor: &mut Editor) -> bool {
         let KeyCode::Char(ch) = keycode.keycode else {
             return false;
@@ -561,6 +568,14 @@ impl Layer for JumpForwardsUntil {
         None
     }
 
+    fn entries(&self) -> Arc<[(Code, Entry)]> {
+        <_>::default()
+    }
+
+    fn wildcard(&self) -> Option<&dyn Layer> {
+        Some(self)
+    }
+
     fn run(&self, keycode: Code, editor: &mut Editor) -> bool {
         let KeyCode::Char(ch) = keycode.keycode else {
             return false;
@@ -591,6 +606,14 @@ impl Layer for JumpBackwardsTo {
 
     fn get(&self, _: Code) -> Option<Entry> {
         None
+    }
+
+    fn entries(&self) -> Arc<[(Code, Entry)]> {
+        <_>::default()
+    }
+
+    fn wildcard(&self) -> Option<&dyn Layer> {
+        Some(self)
     }
 
     fn run(&self, keycode: Code, editor: &mut Editor) -> bool {
@@ -628,6 +651,14 @@ impl Layer for JumpBackwardsUntil {
 
     fn get(&self, _: Code) -> Option<Entry> {
         None
+    }
+
+    fn entries(&self) -> Arc<[(Code, Entry)]> {
+        <_>::default()
+    }
+
+    fn wildcard(&self) -> Option<&dyn Layer> {
+        Some(self)
     }
 
     fn run(&self, keycode: Code, editor: &mut Editor) -> bool {
@@ -724,8 +755,20 @@ impl Layer for TypeChar {
         "type-char"
     }
 
+    fn description(&self) -> &str {
+        "type character *"
+    }
+
     fn get(&self, _: Code) -> Option<Entry> {
         None
+    }
+
+    fn entries(&self) -> Arc<[(Code, Entry)]> {
+        <_>::default()
+    }
+
+    fn wildcard(&self) -> Option<&dyn Layer> {
+        Some(self)
     }
 
     fn run(&self, keycode: Code, editor: &mut Editor) -> bool {
@@ -1139,5 +1182,20 @@ impl Action for BufferPicker {
 
     fn run(&self, editor: &mut Editor) {
         editor.popup = Popup::buffer_picker(editor.view.buffer_index);
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct WhichKey;
+
+impl Action for WhichKey {
+    fn name(&self) -> &str {
+        "which-key"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        editor.force_whichkey ^= true;
     }
 }

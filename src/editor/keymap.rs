@@ -72,6 +72,20 @@ impl Entry {
     pub fn new_layer(layer: impl Layer + 'static) -> Self {
         Self::Layer(Arc::new(layer) as _)
     }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Entry::Layer(layer) => layer.name(),
+            Entry::Action(action) => action.name(),
+        }
+    }
+
+    pub fn description(&self) -> &str {
+        match self {
+            Entry::Layer(layer) => layer.description(),
+            Entry::Action(action) => action.description(),
+        }
+    }
 }
 
 impl From<Arc<dyn Layer>> for Entry {
@@ -88,6 +102,12 @@ impl From<Arc<dyn Action>> for Entry {
 
 impl From<HashMap<Code, Entry>> for Entry {
     fn from(value: HashMap<Code, Entry>) -> Self {
+        LayerBase::new(value).into()
+    }
+}
+
+impl From<LayerBase> for Entry {
+    fn from(value: LayerBase) -> Self {
         Self::Layer(Arc::new(value) as _)
     }
 }
@@ -125,9 +145,21 @@ pub trait Layer: Sync + Send {
 
     fn get(&self, keycode: Code) -> Option<Entry>;
 
+    /// returns all entries (except the wildcard entry)
+    fn entries(&self) -> Arc<[(Code, Entry)]>;
+
+    /// returns the wildcard entry if there is one
+    fn wildcard(&self) -> Option<&dyn Layer> {
+        None
+    }
+
     /// returns true if the layer is now done with actions and the original layer can be restored
     fn run(&self, keycode: Code, editor: &mut Editor) -> bool {
         let Some(next) = self.get(keycode) else {
+            if let Some(wildcard_layer) = self.wildcard() {
+                return wildcard_layer.run(keycode, editor);
+            }
+
             return false;
         };
 
@@ -158,19 +190,58 @@ impl<T: Layer + Default + 'static> LayerExt for T {
     }
 }
 
-impl Layer for HashMap<Code, Entry> {
+#[derive(Clone)]
+pub struct LayerBase {
+    map: HashMap<Code, Entry>,
+    all: Arc<[(Code, Entry)]>,
+}
+
+impl LayerBase {
+    pub fn new(map: HashMap<Code, Entry>) -> Self {
+        let mut all: Arc<[(Code, Entry)]> = map
+            .iter()
+            .map(|(code, entry)| (*code, entry.clone()))
+            .collect();
+
+        if let Some(all) = Arc::get_mut(&mut all) {
+            all.sort_by_key(|(code, _)| {
+                let mut buf = [const { 0 }; 16];
+                code.as_str(&mut buf);
+                buf
+            });
+        }
+
+        Self { map, all }
+    }
+
+    // pub fn from_iter(iter: impl ExactSizeIterator<Item = (Code, Entry)>) -> Self {
+    //     let (map, all) = iter
+    //         .map(|(code, entry)| ((code, entry.clone()), (code, entry)))
+    //         .unzip::<_, _, HashMap<Code, Entry>, Vec<(Code, Entry)>>();
+    //     Self {
+    //         map,
+    //         all: all.into(),
+    //     }
+    // }
+}
+
+impl Layer for LayerBase {
     fn name(&self) -> &str {
         "layer"
     }
 
+    fn entries(&self) -> Arc<[(Code, Entry)]> {
+        self.all.clone()
+    }
+
     fn get(&self, keycode: Code) -> Option<Entry> {
-        self.get(&keycode).cloned()
+        self.map.get(&keycode).cloned()
     }
 }
 
 //
 
-pub struct Global(HashMap<Code, Entry>);
+pub struct Global(LayerBase);
 
 impl Layer for Global {
     fn name(&self) -> &str {
@@ -178,13 +249,17 @@ impl Layer for Global {
     }
 
     fn get(&self, keycode: Code) -> Option<Entry> {
-        Layer::get(&self.0, keycode)
+        self.0.get(keycode)
+    }
+
+    fn entries(&self) -> Arc<[(Code, Entry)]> {
+        self.0.entries()
     }
 }
 
 //
 
-pub struct Normal(HashMap<Code, Entry>);
+pub struct Normal(LayerBase);
 
 impl Layer for Normal {
     fn name(&self) -> &str {
@@ -192,13 +267,17 @@ impl Layer for Normal {
     }
 
     fn get(&self, keycode: Code) -> Option<Entry> {
-        Layer::get(&self.0, keycode)
+        self.0.get(keycode)
+    }
+
+    fn entries(&self) -> Arc<[(Code, Entry)]> {
+        self.0.entries()
     }
 }
 
 //
 
-pub struct Insert(HashMap<Code, Entry>);
+pub struct Insert(LayerBase);
 
 impl Layer for Insert {
     fn name(&self) -> &str {
@@ -206,34 +285,21 @@ impl Layer for Insert {
     }
 
     fn get(&self, keycode: Code) -> Option<Entry> {
-        Layer::get(&self.0, keycode)
+        self.0.get(keycode)
     }
 
-    fn run(&self, keycode: Code, editor: &mut Editor) -> bool {
-        let Some(next) = self.get(keycode) else {
-            return act::TypeChar.run(keycode, editor);
-        };
+    fn entries(&self) -> Arc<[(Code, Entry)]> {
+        self.0.entries()
+    }
 
-        match next {
-            Entry::Layer(layer) => {
-                editor.mode = Mode::Action {
-                    layer,
-                    prev: editor.mode.prev(),
-                };
-            }
-            Entry::Action(action) => {
-                action.run(editor);
-                editor.mode = editor.mode.prev().mode();
-            }
-        };
-
-        true
+    fn wildcard(&self) -> Option<&dyn Layer> {
+        Some(&act::TypeChar)
     }
 }
 
 //
 
-pub struct Command(HashMap<Code, Entry>);
+pub struct Command(LayerBase);
 
 impl Layer for Command {
     fn name(&self) -> &str {
@@ -241,30 +307,15 @@ impl Layer for Command {
     }
 
     fn get(&self, keycode: Code) -> Option<Entry> {
-        Layer::get(&self.0, keycode)
+        self.0.get(keycode)
     }
 
-    fn run(&self, keycode: Code, editor: &mut Editor) -> bool {
-        let Some(next) = self.get(keycode) else {
-            tracing::debug!("running action {}", act::TypeChar.name());
-            return act::TypeChar.run(keycode, editor);
-        };
+    fn entries(&self) -> Arc<[(Code, Entry)]> {
+        self.0.entries()
+    }
 
-        match next {
-            Entry::Layer(layer) => {
-                editor.mode = Mode::Action {
-                    layer,
-                    prev: editor.mode.prev(),
-                };
-            }
-            Entry::Action(action) => {
-                tracing::debug!("running action {}", action.name());
-                action.run(editor);
-                editor.mode = editor.mode.prev().mode();
-            }
-        };
-
-        true
+    fn wildcard(&self) -> Option<&dyn Layer> {
+        Some(&act::TypeChar)
     }
 }
 
@@ -351,6 +402,7 @@ macro_rules! map {
 static DEFAULT_GLOBAL: LazyLock<HashMap<Code, Entry>> = LazyLock::new(|| {
     map! {
         "esc": act::Escape::arc(),
+        "A-/": act::WhichKey::arc(),
     }
 });
 
@@ -395,7 +447,7 @@ static DEFAULT_NORMAL: LazyLock<Arc<dyn Layer>> = LazyLock::new(|| {
             "b":         act::BufferPicker::arc(),
         },
     }
-    Arc::new(Normal(normal)) as _
+    Arc::new(Normal(LayerBase::new(normal))) as _
 });
 
 static DEFAULT_INSERT: LazyLock<Arc<dyn Layer>> = LazyLock::new(|| {
@@ -412,7 +464,7 @@ static DEFAULT_INSERT: LazyLock<Arc<dyn Layer>> = LazyLock::new(|| {
         "end":       act::MoveLineEnd::arc(),
         "backspace": act::Backspace::arc(),
     }
-    Arc::new(Insert(insert)) as _
+    Arc::new(Insert(LayerBase::new(insert))) as _
 });
 
 static DEFAULT_COMMAND: LazyLock<Arc<dyn Layer>> = LazyLock::new(|| {
@@ -423,7 +475,7 @@ static DEFAULT_COMMAND: LazyLock<Arc<dyn Layer>> = LazyLock::new(|| {
         "tab":       act::NextSuggestion::arc(),
         "S-tab":     act::PrevSuggestion::arc(),
     };
-    Arc::new(Command(command)) as _
+    Arc::new(Command(LayerBase::new(command))) as _
 });
 
 //
@@ -460,6 +512,61 @@ impl Code {
                 KeyModifiers::from_bits_truncate(modifiers.bits() | KeyModifiers::SHIFT.bits());
         }
         Self { keycode, modifiers }
+    }
+
+    pub fn as_str<'a>(&self, buf: &'a mut [u8; 16]) -> &'a str {
+        let mut len = 0usize;
+
+        if self.modifiers.contains(KeyModifiers::CONTROL) {
+            buf[len] = b'C';
+            buf[len + 1] = b'-';
+            len += 2;
+        }
+        if self.modifiers.contains(KeyModifiers::ALT) {
+            buf[len] = b'A';
+            buf[len + 1] = b'-';
+            len += 2;
+        }
+        if self.modifiers.contains(KeyModifiers::SHIFT) {
+            buf[len] = b'S';
+            buf[len + 1] = b'-';
+            len += 2;
+        }
+
+        let other: &[u8] = match self.keycode {
+            KeyCode::Esc => b"esc",
+            KeyCode::Backspace => b"backspace",
+            KeyCode::Left => b"left",
+            KeyCode::Right => b"right",
+            KeyCode::Up => b"up",
+            KeyCode::Down => b"down",
+            KeyCode::PageUp => b"pageup",
+            KeyCode::PageDown => b"pagedown",
+            KeyCode::Home => b"home",
+            KeyCode::End => b"end",
+            KeyCode::Tab => b"tab",
+            KeyCode::Char(' ') => b"space",
+            KeyCode::Char(c) => {
+                len += c.encode_utf8(&mut buf[len..]).len();
+                return std::str::from_utf8(&buf[..len]).unwrap_or("??");
+            }
+            KeyCode::F(n) => {
+                buf[len] = b'f';
+                if n >= 10 {
+                    buf[len + 1] = (n / 10) % 10 + b'0';
+                    len += 1;
+                }
+                buf[len + 1] = n % 10 + b'0';
+                len += 2;
+                return std::str::from_utf8(&buf[..len]).unwrap_or("??");
+            }
+            _ => b"??",
+        };
+
+        buf[len..][..other.len()].copy_from_slice(other);
+        len += other.len();
+
+        std::str::from_utf8(&buf[..len]).unwrap_or("??")
     }
 
     pub const fn from_str(s: &str) -> Self {
