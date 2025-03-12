@@ -2,7 +2,10 @@ use std::cmp::Ordering;
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    widgets::{Paragraph, Widget},
+    style::Style,
+    text::Line,
+    widgets::{Block, Paragraph, Widget},
+    Frame,
 };
 
 use crate::{buffer::Buffer, mode::Mode};
@@ -26,13 +29,35 @@ impl BufferView {
         }
     }
 
-    pub fn render<'a>(
+    pub fn render(
         &mut self,
-        buffer: &'a Buffer,
+        buffer: &Buffer,
         mode: &Mode,
         area: Rect,
         frame: &mut ratatui::prelude::Frame,
-    ) -> ((usize, usize), &'a str, (usize, usize)) {
+    ) -> (usize, usize) {
+        let [buffer_area, bufferline_area] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+
+        let (row, col) = self.render_buffer(buffer, buffer_area, frame, mode.is_insert());
+
+        // render the buffer line
+        self.render_bufferline(buffer, bufferline_area, frame, mode.as_str(), col, row);
+
+        let real_cursor_row = row - self.view_line + buffer_area.y as usize;
+        let real_cursor_col =
+            self.cursor - buffer.contents.line_to_char(row) + buffer_area.x as usize;
+
+        (real_cursor_row, real_cursor_col)
+    }
+
+    fn render_buffer(
+        &mut self,
+        buffer: &Buffer,
+        area: Rect,
+        frame: &mut Frame,
+        is_insert_mode: bool,
+    ) -> (usize, usize) {
         let lines = buffer.contents.len_lines();
 
         let [_, line_numbers_area, _, buffer_area] = Layout::horizontal([
@@ -88,19 +113,30 @@ impl BufferView {
             line: self.view_line,
             row,
             col,
-            mode,
+            is_insert_mode,
         };
         frame.render_widget(cursor, buffer_area);
 
-        let real_cursor_row = row - self.view_line + buffer_area.y as usize;
-        let real_cursor_col =
-            self.cursor - buffer.contents.line_to_char(row) + buffer_area.x as usize;
+        (row, col)
+    }
 
-        (
-            (col, row),
-            buffer.name.as_ref(),
-            (real_cursor_col, real_cursor_row),
-        )
+    fn render_bufferline(
+        &mut self,
+        buffer: &Buffer,
+        area: Rect,
+        frame: &mut Frame,
+        mode: &str,
+        col: usize,
+        row: usize,
+    ) {
+        let cursor_pos = format!("{row}:{col}");
+        let left = Line::from_iter([" ", mode, "   ", buffer.name.as_ref()]);
+        let right = Line::from_iter([cursor_pos.as_str(), " "]);
+        let info = Block::new()
+            .title(left.left_aligned())
+            .title(right.right_aligned())
+            .style(Style::new().bg(theme::BUFFER_LINE));
+        frame.render_widget(info, area);
     }
 
     /// count matching characters starting and including `from`
@@ -270,14 +306,14 @@ impl Widget for BufferWidget<'_> {
     }
 }
 
-pub struct Cursor<'a> {
+pub struct Cursor {
     line: usize,
     row: usize,
     col: usize,
-    mode: &'a Mode,
+    is_insert_mode: bool,
 }
 
-impl Widget for Cursor<'_> {
+impl Widget for Cursor {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
         if self.row - self.line > area.height as usize || self.col > area.width as usize {
             return;
@@ -300,7 +336,7 @@ impl Widget for Cursor<'_> {
             }
         }
         // highlight the cursor itself
-        if !self.mode.is_insert() {
+        if !self.is_insert_mode {
             buf[(col, row)]
                 .set_bg(theme::CURSOR)
                 .set_fg(theme::BACKGROUND);

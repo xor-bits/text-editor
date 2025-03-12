@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Layout, Margin, Position, Rect},
     style::{Style, Stylize},
     text::Line,
-    widgets::Block,
+    widgets::{Block, Clear},
     DefaultTerminal, Frame,
 };
 
@@ -98,8 +98,8 @@ impl Editor {
                 terminal.show_cursor().unwrap();
                 terminal
                     .set_cursor_position(Position {
-                        x: self.real_cursor.0 as u16,
-                        y: self.real_cursor.1 as u16,
+                        x: self.real_cursor.1 as u16,
+                        y: self.real_cursor.0 as u16,
                     })
                     .unwrap();
             } else {
@@ -120,54 +120,50 @@ impl Editor {
             frame.area(),
         );
 
-        let [buffer_area, info_area, cmd_area] = Layout::vertical([
-            Constraint::Min(0),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .areas(frame.area());
+        let [buffer_area, cmd_area] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
 
-        let [buffer_area, suggestion_area] = Layout::vertical([
+        // render the main buffer view
+        self.real_cursor = BufferViewMut::new(&mut self.view, &mut self.buffers).render(
+            &self.mode,
+            buffer_area,
+            frame,
+        );
+
+        // render the command suggestion box
+        self.render_cmd_suggestions(buffer_area, frame);
+
+        // render the command line
+        self.render_cmdline(cmd_area, frame);
+
+        // render popups like the file explorer or buffer picker
+        self.render_popups(buffer_area, frame);
+    }
+
+    fn render_cmd_suggestions(&mut self, area: Rect, frame: &mut Frame) {
+        // render suggestions as a popup over the buffer area
+        let [_, area] = Layout::vertical([
             Constraint::Min(1),
             Constraint::Length((self.command_suggestions.len() as u16).min(10)),
         ])
-        .areas(buffer_area);
-
-        let ((col, row), buf_name, _real_cursor) = BufferViewMut::new(
-            &mut self.view,
-            &mut self.buffers,
-        )
-        .render(&self.mode, buffer_area, frame);
-        self.real_cursor = _real_cursor;
-
-        let cursor_pos = format!("{row}:{col}");
-        let left = Line::from_iter([" ", self.mode.as_str(), "   ", buf_name]);
-        let right = Line::from_iter([cursor_pos.as_str(), " "]);
-        let info = Block::new()
-            .title(left.left_aligned())
-            .title(right.right_aligned())
-            .style(Style::new().bg(theme::BUFFER_LINE));
-        frame.render_widget(info, info_area);
-        // let bg = Block::new().style(Style::new().bg(Color::Black));
-        // frame.render_widget(bg, cmd_area);
-        // frame.render_widget(self.command.as_str(), cmd_area);
+        .areas(area);
 
         let suggestion_list_chunk_start = self
             .command_suggestion_index
             .unwrap_or(0)
-            .checked_div(suggestion_area.height as usize)
+            .checked_div(area.height as usize)
             .unwrap_or(0)
-            .checked_mul(suggestion_area.height as usize)
+            .checked_mul(area.height as usize)
             .unwrap_or(0);
-
         let suggestion_bg = Block::new().style(Style::new().bg(theme::BACKGROUND_LIGHT));
-        frame.render_widget(suggestion_bg, suggestion_area);
+        frame.render_widget(Clear, area);
+        frame.render_widget(suggestion_bg, area);
         for (i, act) in self
             .command_suggestions
             .iter()
             .enumerate()
             .skip(suggestion_list_chunk_start)
-            .take(suggestion_area.height as usize)
+            .take(area.height as usize)
         {
             let (fg, bg) = if Some(i) == self.command_suggestion_index {
                 (theme::BACKGROUND_LIGHT, theme::CURSOR)
@@ -176,9 +172,9 @@ impl Editor {
             };
 
             let area = Rect {
-                x: suggestion_area.x,
-                y: suggestion_area.y + (i - suggestion_list_chunk_start) as u16,
-                width: suggestion_area.width,
+                x: area.x,
+                y: area.y + (i - suggestion_list_chunk_start) as u16,
+                width: area.width,
                 height: 1,
             };
 
@@ -196,19 +192,24 @@ impl Editor {
                 );
             frame.render_widget(suggestion, area);
         }
+    }
 
+    fn render_cmdline(&mut self, area: Rect, frame: &mut Frame) {
         let cmd = Block::new()
             // .style(Style::new().bg(Color::Black))
             .title(self.command.as_str());
-        frame.render_widget(cmd, cmd_area);
+        frame.render_widget(cmd, area);
+        // frame.render_widget(Block::new().title("cmd area"), cmd_area);
+    }
 
-        let popup_area = buffer_area.inner(Margin {
-            horizontal: (buffer_area.width as f32 * 0.1) as u16,
-            vertical: (buffer_area.height as f32 * 0.1) as u16,
+    fn render_popups(&mut self, area: Rect, frame: &mut Frame) {
+        _ = area;
+        let area = frame.area();
+        let popup_area = area.inner(Margin {
+            horizontal: (area.width as f32 * 0.1) as u16,
+            vertical: (area.height as f32 * 0.1) as u16,
         });
         self.popup.render(&self.buffers, popup_area, frame);
-
-        // frame.render_widget(Block::new().title("cmd area"), cmd_area);
     }
 
     pub fn event(&mut self, event: Event) {
@@ -342,7 +343,7 @@ impl<'a> BufferViewMut<'a> {
         mode: &Mode,
         area: Rect,
         frame: &mut ratatui::prelude::Frame,
-    ) -> ((usize, usize), &'a str, (usize, usize)) {
+    ) -> (usize, usize) {
         self.view.render(self.buffer, mode, area, frame)
     }
 
