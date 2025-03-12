@@ -78,7 +78,7 @@ impl Popup {
                 .collect::<Result<_>>()?;
         }
 
-        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files.sort_by(|a, b| (!a.1, a.0.as_ref()).cmp(&(!b.1, b.0.as_ref())));
 
         Ok(Self::FileExplorer {
             files,
