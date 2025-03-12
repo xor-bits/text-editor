@@ -849,7 +849,9 @@ impl Action for Quit {
         if editor.current().buffer.modified {
             editor.status_is_error = true;
             editor.status.clear();
-            editor.status.push_str("unsaved changes");
+            editor
+                .status
+                .push_str("unsaved changes, type :q! to quit without saving");
             return;
         }
 

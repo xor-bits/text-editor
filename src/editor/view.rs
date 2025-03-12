@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, env};
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -8,7 +8,10 @@ use ratatui::{
     Frame,
 };
 
-use crate::{buffer::Buffer, mode::Mode};
+use crate::{
+    buffer::{Buffer, BufferInner},
+    mode::Mode,
+};
 
 use super::theme;
 
@@ -108,6 +111,10 @@ impl BufferView {
         };
         frame.render_widget(buffer_widget, buffer_area);
 
+        if matches!(buffer.inner, BufferInner::Scratch { show_welcome: true }) && !buffer.modified {
+            self.render_welcome(buffer_area, frame);
+        }
+
         // render the cursor and cursor crosshair
         let cursor = Cursor {
             line: self.view_line,
@@ -118,6 +125,33 @@ impl BufferView {
         frame.render_widget(cursor, buffer_area);
 
         (row, col)
+    }
+
+    fn render_welcome(&mut self, area: Rect, frame: &mut Frame) {
+        let [_, area, _] = Layout::vertical([
+            Constraint::Percentage(50),
+            Constraint::Length(10),
+            Constraint::Percentage(50),
+        ])
+        .areas(area);
+
+        let widget = Paragraph::new(vec![
+            Line::from_iter(["text-editor v", env!("CARGO_PKG_VERSION")]),
+            Line::from_iter([""]),
+            Line::from_iter(["type  :q<Enter>   to exit               "]),
+            Line::from_iter([""]),
+            Line::from_iter(["press <Alt + />   for keybinds          "]),
+            Line::from_iter([""]),
+            Line::from_iter(["type  :           for a list of commands"]),
+            Line::from_iter(["press <Tab>       to cycle that list    "]),
+            Line::from_iter(["type  :open file  to open file          "]),
+            Line::from_iter([""]),
+            Line::from_iter(["have a nice day"]),
+        ])
+        .centered()
+        .style(Style::new().bg(theme::BACKGROUND).fg(theme::CURSOR));
+
+        frame.render_widget(widget, area);
     }
 
     fn render_bufferline(

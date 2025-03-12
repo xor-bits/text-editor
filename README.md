@@ -44,6 +44,7 @@ text-editor ssh:user1@host1|ssh:user2@host2:file
  - [x] multiple buffers
  - [x] file picker
  - [x] buffer picker
+ - [x] welcome message
  - [ ] SSH/sudo askpass somehow
  - [ ] hex editor
  - [ ] NBT editor
