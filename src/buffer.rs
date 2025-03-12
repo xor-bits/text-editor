@@ -141,6 +141,7 @@ impl Buffer {
                 }
 
                 inner.seek(io::SeekFrom::Start(0))?;
+                inner.set_len(self.contents.len_bytes() as u64)?;
 
                 self.contents.write_to(inner)?;
             }
