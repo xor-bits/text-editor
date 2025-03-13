@@ -42,16 +42,13 @@ impl BufferView {
         let [buffer_area, bufferline_area] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
 
-        let (row, col) = self.render_buffer(buffer, buffer_area, frame, mode.is_insert());
+        let ((row, col), real_cursor) =
+            self.render_buffer(buffer, buffer_area, frame, mode.is_insert());
 
         // render the buffer line
         self.render_bufferline(buffer, bufferline_area, frame, mode.as_str(), col, row);
 
-        let real_cursor_row = row - self.view_line + buffer_area.y as usize;
-        let real_cursor_col =
-            self.cursor - buffer.contents.line_to_char(row) + buffer_area.x as usize;
-
-        (real_cursor_row, real_cursor_col)
+        real_cursor
     }
 
     fn render_buffer(
@@ -60,7 +57,7 @@ impl BufferView {
         area: Rect,
         frame: &mut Frame,
         is_insert_mode: bool,
-    ) -> (usize, usize) {
+    ) -> ((usize, usize), (usize, usize)) {
         let lines = buffer.contents.len_lines();
 
         let [_, line_numbers_area, _, buffer_area] = Layout::horizontal([
@@ -124,7 +121,10 @@ impl BufferView {
         };
         frame.render_widget(cursor, buffer_area);
 
-        (row, col)
+        let real_cursor_row = row - self.view_line + buffer_area.y as usize;
+        let real_cursor_col = col + buffer_area.x as usize;
+
+        ((row, col), (real_cursor_row, real_cursor_col))
     }
 
     fn render_welcome(&mut self, area: Rect, frame: &mut Frame) {
@@ -164,7 +164,11 @@ impl BufferView {
         row: usize,
     ) {
         let cursor_pos = format!("{row}:{col}");
-        let left = Line::from_iter([" ", mode, "   ", buffer.name.as_ref()]);
+        let left = if buffer.modified {
+            Line::from_iter([" ", mode, "   ", buffer.name.as_ref(), " [+]"])
+        } else {
+            Line::from_iter([" ", mode, "   ", buffer.name.as_ref()])
+        };
         let right = Line::from_iter([cursor_pos.as_str(), " "]);
         let info = Block::new()
             .title(left.left_aligned())
