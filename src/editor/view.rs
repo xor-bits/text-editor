@@ -7,9 +7,10 @@ use ratatui::{
     widgets::{Block, Paragraph, Widget},
     Frame,
 };
+use ropey::Rope;
 
 use crate::{
-    buffer::{Buffer, BufferInner},
+    buffer::{Buffer, BufferContents, BufferInner},
     mode::Mode,
 };
 
@@ -42,8 +43,15 @@ impl BufferView {
         let [buffer_area, bufferline_area] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
 
-        let ((row, col), real_cursor) =
-            self.render_buffer(buffer, buffer_area, frame, mode.is_insert());
+        let ((row, col), real_cursor) = self.render_text_buffer(
+            buffer,
+            match &buffer.contents {
+                BufferContents::Text(rope) => rope,
+            },
+            buffer_area,
+            frame,
+            mode.is_insert(),
+        );
 
         // render the buffer line
         self.render_bufferline(buffer, bufferline_area, frame, mode.as_str(), col, row);
@@ -51,14 +59,15 @@ impl BufferView {
         real_cursor
     }
 
-    fn render_buffer(
+    fn render_text_buffer(
         &mut self,
         buffer: &Buffer,
+        contents: &Rope,
         area: Rect,
         frame: &mut Frame,
         is_insert_mode: bool,
     ) -> ((usize, usize), (usize, usize)) {
-        let lines = buffer.contents.len_lines();
+        let lines = contents.len_lines();
 
         let [_, line_numbers_area, _, buffer_area] = Layout::horizontal([
             Constraint::Length(2),
@@ -68,8 +77,8 @@ impl BufferView {
         ])
         .areas(area);
 
-        let row = buffer.contents.char_to_line(self.cursor);
-        let col = self.cursor - buffer.contents.line_to_char(row);
+        let row = contents.char_to_line(self.cursor);
+        let col = self.cursor - contents.line_to_char(row);
 
         // keep the cursor within view
         // tracing::debug!(
@@ -184,13 +193,14 @@ impl BufferView {
         from: usize,
         mut pred: impl FnMut(char) -> bool,
     ) -> usize {
-        buffer
-            .contents
-            .get_chars_at(from)
-            .into_iter()
-            .flatten()
-            .take_while(|ch| pred(*ch))
-            .count()
+        match &buffer.contents {
+            BufferContents::Text(rope) => rope,
+        }
+        .get_chars_at(from)
+        .into_iter()
+        .flatten()
+        .take_while(|ch| pred(*ch))
+        .count()
     }
 
     /// find the next matching `pred` starting and including `from`
@@ -200,12 +210,13 @@ impl BufferView {
         from: usize,
         pred: impl FnMut(char) -> bool,
     ) -> Option<usize> {
-        buffer
-            .contents
-            .get_chars_at(from)
-            .into_iter()
-            .flatten()
-            .position(pred)
+        match &buffer.contents {
+            BufferContents::Text(rope) => rope,
+        }
+        .get_chars_at(from)
+        .into_iter()
+        .flatten()
+        .position(pred)
     }
 
     /// reverse find the next matching `pred` starting and including `from`
@@ -215,44 +226,51 @@ impl BufferView {
         from: usize,
         pred: impl FnMut(char) -> bool,
     ) -> Option<usize> {
-        buffer
-            .contents
-            .get_chars_at(from + 1)
-            .map(|s| s.reversed())
-            .into_iter()
-            .flatten()
-            .position(pred)
+        match &buffer.contents {
+            BufferContents::Text(rope) => rope,
+        }
+        .get_chars_at(from + 1)
+        .map(|s| s.reversed())
+        .into_iter()
+        .flatten()
+        .position(pred)
     }
 
     /// find the next word boundary starting and including `from`
     pub fn find_boundary(&self, buffer: &Buffer, from: usize) -> usize {
-        buffer
-            .contents
-            .chars_at(from)
-            .scan(None, |first, ch| {
-                let ty = ch.is_alphanumeric();
-                (*first.get_or_insert(ty) == ty).then_some(())
-            })
-            .skip(1)
-            .count()
+        match &buffer.contents {
+            BufferContents::Text(rope) => rope,
+        }
+        .chars_at(from)
+        .scan(None, |first, ch| {
+            let ty = ch.is_alphanumeric();
+            (*first.get_or_insert(ty) == ty).then_some(())
+        })
+        .skip(1)
+        .count()
     }
 
     /// reverse find the next word boundary starting and including `from`
     pub fn rfind_boundary(&self, buffer: &Buffer, from: usize) -> usize {
-        buffer
-            .contents
-            .chars_at(from + 1)
-            .reversed()
-            .scan(None, |first, ch| {
-                let ty = ch.is_alphanumeric();
-                (*first.get_or_insert(ty) == ty).then_some(())
-            })
-            .skip(1)
-            .count()
+        match &buffer.contents {
+            BufferContents::Text(rope) => rope,
+        }
+        .chars_at(from + 1)
+        .reversed()
+        .scan(None, |first, ch| {
+            let ty = ch.is_alphanumeric();
+            (*first.get_or_insert(ty) == ty).then_some(())
+        })
+        .skip(1)
+        .count()
     }
 
     pub fn jump_cursor(&mut self, buffer: &Buffer, delta_x: isize, delta_y: isize) {
-        if buffer.contents.len_chars() == 0 {
+        let contents = match &buffer.contents {
+            BufferContents::Text(rope) => rope,
+        };
+
+        if contents.len_chars() == 0 {
             // cant move if the buffer has nothing
             self.cursor = 0;
             return;
@@ -263,46 +281,47 @@ impl BufferView {
             self.cursor = self
                 .cursor
                 .saturating_add_signed(delta_x)
-                .min(buffer.contents.len_chars());
+                .min(contents.len_chars());
         }
 
         // delta Y from now on
-        if delta_y == 0 || buffer.contents.len_lines() == 0 {
+        if delta_y == 0 || contents.len_lines() == 0 {
             return;
         }
 
         // figure out what X position the cursor is moved to
-        let cursor_line = buffer.contents.char_to_line(self.cursor);
-        let line_start = buffer.contents.line_to_char(cursor_line);
+        let cursor_line = contents.char_to_line(self.cursor);
+        let line_start = contents.line_to_char(cursor_line);
         let cursor_x = self.cursor - line_start;
 
         let target_line = cursor_line
             .saturating_add_signed(delta_y)
-            .min(buffer.contents.len_lines() - 1);
-        let target_line_len = buffer
-            .contents
-            .line(target_line)
-            .len_chars()
-            .saturating_sub(1);
+            .min(contents.len_lines() - 1);
+        let target_line_len = contents.line(target_line).len_chars().saturating_sub(1);
 
         // place the cursor on the same X position or on the last char on the line
-        let target_line_start = buffer.contents.line_to_char(target_line);
+        let target_line_start = contents.line_to_char(target_line);
         self.cursor = target_line_start + target_line_len.min(cursor_x);
     }
 
     pub fn jump_line_beg(&mut self, buffer: &Buffer) {
-        self.cursor = buffer
-            .contents
-            .line_to_char(buffer.contents.char_to_line(self.cursor));
+        let contents = match &buffer.contents {
+            BufferContents::Text(rope) => rope,
+        };
+
+        self.cursor = contents.line_to_char(contents.char_to_line(self.cursor));
     }
 
     pub fn jump_line_end(&mut self, buffer: &Buffer) {
-        let line = buffer.contents.char_to_line(self.cursor);
-        let line_len = buffer.contents.line(line).len_chars();
-        self.cursor = buffer
-            .contents
+        let contents = match &buffer.contents {
+            BufferContents::Text(rope) => rope,
+        };
+
+        let line = contents.char_to_line(self.cursor);
+        let line_len = contents.line(line).len_chars();
+        self.cursor = contents
             .len_chars()
-            .min((buffer.contents.line_to_char(line) + line_len).saturating_sub(2));
+            .min((contents.line_to_char(line) + line_len).saturating_sub(2));
     }
 
     pub fn jump_beg(&mut self) {
@@ -310,7 +329,11 @@ impl BufferView {
     }
 
     pub fn jump_end(&mut self, buffer: &Buffer) {
-        self.cursor = buffer.contents.len_chars().saturating_sub(1);
+        let contents = match &buffer.contents {
+            BufferContents::Text(rope) => rope,
+        };
+
+        self.cursor = contents.len_chars().saturating_sub(1);
     }
 }
 
@@ -323,14 +346,14 @@ struct BufferWidget<'a> {
 
 impl Widget for BufferWidget<'_> {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
-        for (y, line) in self
-            .buffer
-            .contents
-            .get_lines_at(self.line)
-            .into_iter()
-            .flatten()
-            .take(area.height as usize)
-            .enumerate()
+        for (y, line) in match &self.buffer.contents {
+            BufferContents::Text(rope) => rope,
+        }
+        .get_lines_at(self.line)
+        .into_iter()
+        .flatten()
+        .take(area.height as usize)
+        .enumerate()
         {
             for (x, ch) in line
                 .chars()

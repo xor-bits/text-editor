@@ -14,24 +14,17 @@ use crate::tramp::{ConnectionPool, Part};
 //
 
 pub struct Buffer {
-    pub contents: Rope,
+    pub contents: BufferContents,
     pub name: Cow<'static, str>,
     /// where the buffer is stored, if it even is
     pub inner: BufferInner,
     pub modified: bool,
 }
 
-pub enum BufferInner {
-    File { inner: fs::File, readonly: bool },
-    NewFile { inner: PathBuf },
-    Remote { remote: Arc<[Part]> },
-    Scratch { show_welcome: bool },
-}
-
 impl Buffer {
     pub fn new() -> Self {
         Self {
-            contents: Rope::new(),
+            contents: BufferContents::Text(Rope::new()),
             name: Cow::Borrowed("[scratch]"),
             inner: BufferInner::Scratch {
                 show_welcome: false,
@@ -42,7 +35,7 @@ impl Buffer {
 
     pub fn new_welcome() -> Self {
         Self {
-            contents: Rope::new(),
+            contents: BufferContents::Text(Rope::new()),
             name: Cow::Borrowed("[scratch]"),
             inner: BufferInner::Scratch { show_welcome: true },
             modified: false,
@@ -67,7 +60,7 @@ impl Buffer {
         CONN_POOL.recycle(conn);
 
         Ok(Self {
-            contents,
+            contents: BufferContents::Text(contents),
             name,
             inner: BufferInner::Remote { remote },
             modified: false,
@@ -88,7 +81,7 @@ impl Buffer {
             Err(other) => bail!(other),
             Ok(file) => {
                 return Ok(Self {
-                    contents: Rope::from_reader(&file)?,
+                    contents: BufferContents::Text(Rope::from_reader(&file)?),
                     name,
                     inner: BufferInner::File {
                         inner: file,
@@ -110,7 +103,7 @@ impl Buffer {
             Err(other) => bail!(other),
             Ok(file) => {
                 return Ok(Self {
-                    contents: Rope::from_reader(&file)?,
+                    contents: BufferContents::Text(Rope::from_reader(&file)?),
                     name,
                     inner: BufferInner::File {
                         inner: file,
@@ -123,7 +116,7 @@ impl Buffer {
 
         // finally open it as a new file, without creating the file yet
         Ok(Self {
-            contents: Rope::new(),
+            contents: BufferContents::Text(Rope::new()),
             name,
             inner: BufferInner::NewFile { inner: path.into() },
             modified: false,
@@ -140,10 +133,11 @@ impl Buffer {
                     bail!("readonly");
                 }
 
-                inner.seek(io::SeekFrom::Start(0))?;
-                inner.set_len(self.contents.len_bytes() as u64)?;
+                let mut inner = inner;
 
-                self.contents.write_to(inner)?;
+                inner.seek(io::SeekFrom::Start(0))?;
+                let len = self.contents.write_to(&mut inner)?;
+                inner.set_len(len as u64)?;
             }
             BufferInner::NewFile { ref inner } => {
                 let new_file = fs::OpenOptions::new()
@@ -179,6 +173,33 @@ impl Buffer {
 impl Default for Buffer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+//
+
+pub enum BufferInner {
+    File { inner: fs::File, readonly: bool },
+    NewFile { inner: PathBuf },
+    Remote { remote: Arc<[Part]> },
+    Scratch { show_welcome: bool },
+}
+
+//
+
+pub enum BufferContents {
+    Text(Rope),
+    // Hex(ByteRope),
+}
+
+impl BufferContents {
+    pub fn write_to(&self, writer: impl io::Write) -> Result<usize> {
+        match self {
+            BufferContents::Text(rope) => {
+                rope.write_to(writer)?;
+                Ok(rope.len_bytes())
+            }
+        }
     }
 }
 

@@ -3,7 +3,7 @@ use std::{env, path::PathBuf, sync::Arc};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::{
-    buffer::{Buffer, BufferInner},
+    buffer::{Buffer, BufferContents, BufferInner},
     editor::{
         keymap::{Code, Entry, Layer},
         popup::Popup,
@@ -306,13 +306,17 @@ impl Action for NextWordBeg {
     fn run(&self, editor: &mut Editor) {
         let cur = editor.current_mut();
 
-        if cur.view.cursor + 1 >= cur.buffer.contents.len_chars() {
-            return;
-        }
+        match cur.buffer.contents {
+            BufferContents::Text(ref rope) => {
+                if cur.view.cursor + 1 >= rope.len_chars() {
+                    return;
+                }
 
-        cur.view.cursor += 1;
-        cur.view.cursor += cur.find_boundary(cur.view.cursor);
-        cur.view.cursor += cur.count_matching(cur.view.cursor + 1, |ch| ch.is_whitespace());
+                cur.view.cursor += 1;
+                cur.view.cursor += cur.find_boundary(cur.view.cursor);
+                cur.view.cursor += cur.count_matching(cur.view.cursor + 1, |ch| ch.is_whitespace());
+            }
+        }
     }
 }
 
@@ -333,12 +337,16 @@ impl Action for NextWordEnd {
     fn run(&self, editor: &mut Editor) {
         let cur = editor.current_mut();
 
-        if cur.view.cursor + 1 >= cur.buffer.contents.len_chars() {
-            return;
-        }
+        match cur.buffer.contents {
+            BufferContents::Text(ref rope) => {
+                if cur.view.cursor + 1 >= rope.len_chars() {
+                    return;
+                }
 
-        cur.view.cursor += 1;
-        cur.view.cursor += cur.find_boundary(cur.view.cursor);
+                cur.view.cursor += 1;
+                cur.view.cursor += cur.find_boundary(cur.view.cursor);
+            }
+        }
     }
 }
 
@@ -487,9 +495,14 @@ impl Action for InsertLineBelow {
         editor.mode = Mode::Insert { append: true };
         let mut cur = editor.current_mut();
         cur.jump_line_end();
-        cur.buffer.contents.insert_char(cur.view.cursor, '\n');
-        cur.buffer.modified = true;
-        cur.jump_cursor(1, 0);
+
+        match cur.buffer.contents {
+            BufferContents::Text(ref mut rope) => {
+                rope.insert_char(cur.view.cursor, '\n');
+                cur.buffer.modified = true;
+                cur.jump_cursor(1, 0);
+            }
+        }
     }
 }
 
@@ -511,8 +524,13 @@ impl Action for InsertLineAbove {
         editor.mode = Mode::Insert { append: true };
         let mut cur = editor.current_mut();
         cur.jump_line_beg();
-        cur.buffer.contents.insert_char(cur.view.cursor, '\n');
-        cur.buffer.modified = true;
+
+        match cur.buffer.contents {
+            BufferContents::Text(ref mut rope) => {
+                rope.insert_char(cur.view.cursor, '\n');
+                cur.buffer.modified = true;
+            }
+        }
     }
 }
 
@@ -702,13 +720,15 @@ impl Action for Delete {
             return;
         }
 
-        if cur
-            .buffer
-            .contents
-            .try_remove(cur.view.cursor..cur.view.cursor + 1)
-            .is_ok()
-        {
-            cur.buffer.modified = true;
+        match cur.buffer.contents {
+            BufferContents::Text(ref mut rope) => {
+                if rope
+                    .try_remove(cur.view.cursor..cur.view.cursor + 1)
+                    .is_ok()
+                {
+                    cur.buffer.modified = true;
+                }
+            }
         }
     }
 }
@@ -735,11 +755,13 @@ impl Action for Backspace {
                     return;
                 }
 
-                cur.buffer
-                    .contents
-                    .remove(cur.view.cursor - 1..cur.view.cursor);
-                cur.buffer.modified = true;
-                cur.jump_cursor(-1, 0);
+                match cur.buffer.contents {
+                    BufferContents::Text(ref mut rope) => {
+                        rope.remove(cur.view.cursor - 1..cur.view.cursor);
+                        cur.buffer.modified = true;
+                        cur.jump_cursor(-1, 0);
+                    }
+                }
             }
             Mode::Command => {
                 if editor.command.len() >= 2 {
@@ -794,9 +816,14 @@ impl Layer for TypeChar {
         match editor.mode {
             Mode::Insert { .. } => {
                 let mut cur = editor.current_mut();
-                cur.buffer.contents.insert_char(cur.view.cursor, ch);
-                cur.buffer.modified = true;
-                cur.jump_cursor(1, 0);
+
+                match cur.buffer.contents {
+                    BufferContents::Text(ref mut rope) => {
+                        rope.insert_char(cur.view.cursor, ch);
+                        cur.buffer.modified = true;
+                        cur.jump_cursor(1, 0);
+                    }
+                }
             }
             Mode::Command => {
                 if ch == '\n' {
