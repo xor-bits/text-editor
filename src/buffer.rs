@@ -189,15 +189,30 @@ pub enum BufferInner {
 
 pub enum BufferContents {
     Text(Rope),
-    // Hex(ByteRope),
+    Hex(Vec<u8>),
 }
 
 impl BufferContents {
-    pub fn write_to(&self, writer: impl io::Write) -> Result<usize> {
+    pub fn len(&self) -> usize {
+        match self {
+            BufferContents::Text(rope) => rope.len_chars(),
+            BufferContents::Hex(vec) => vec.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn write_to(&self, mut writer: impl io::Write) -> Result<usize> {
         match self {
             BufferContents::Text(rope) => {
                 rope.write_to(writer)?;
                 Ok(rope.len_bytes())
+            }
+            BufferContents::Hex(vec) => {
+                writer.write_all(&vec[..])?;
+                Ok(vec.len())
             }
         }
     }

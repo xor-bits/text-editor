@@ -304,19 +304,10 @@ impl Action for NextWordBeg {
     }
 
     fn run(&self, editor: &mut Editor) {
-        let cur = editor.current_mut();
-
-        match cur.buffer.contents {
-            BufferContents::Text(ref rope) => {
-                if cur.view.cursor + 1 >= rope.len_chars() {
-                    return;
-                }
-
-                cur.view.cursor += 1;
-                cur.view.cursor += cur.find_boundary(cur.view.cursor);
-                cur.view.cursor += cur.count_matching(cur.view.cursor + 1, |ch| ch.is_whitespace());
-            }
-        }
+        let mut cur = editor.current_mut();
+        cur.jump_cursor(1, 0);
+        cur.view.cursor += cur.find_boundary(cur.view.cursor);
+        // FIXME:
     }
 }
 
@@ -335,18 +326,9 @@ impl Action for NextWordEnd {
     }
 
     fn run(&self, editor: &mut Editor) {
-        let cur = editor.current_mut();
-
-        match cur.buffer.contents {
-            BufferContents::Text(ref rope) => {
-                if cur.view.cursor + 1 >= rope.len_chars() {
-                    return;
-                }
-
-                cur.view.cursor += 1;
-                cur.view.cursor += cur.find_boundary(cur.view.cursor);
-            }
-        }
+        let mut cur = editor.current_mut();
+        cur.jump_cursor(1, 0);
+        cur.view.cursor += cur.find_boundary(cur.view.cursor);
     }
 }
 
@@ -496,13 +478,19 @@ impl Action for InsertLineBelow {
         let mut cur = editor.current_mut();
         cur.jump_line_end();
 
-        match cur.buffer.contents {
-            BufferContents::Text(ref mut rope) => {
+        cur.buffer.modified = true;
+        match &mut cur.buffer.contents {
+            BufferContents::Text(rope) => {
                 rope.insert_char(cur.view.cursor, '\n');
-                cur.buffer.modified = true;
-                cur.jump_cursor(1, 0);
+            }
+            BufferContents::Hex(vec) => {
+                vec.splice(
+                    cur.view.cursor..=cur.view.cursor,
+                    [const { 0 }; 16].into_iter(),
+                );
             }
         }
+        cur.jump_cursor(1, 0);
     }
 }
 
@@ -525,10 +513,16 @@ impl Action for InsertLineAbove {
         let mut cur = editor.current_mut();
         cur.jump_line_beg();
 
-        match cur.buffer.contents {
-            BufferContents::Text(ref mut rope) => {
+        cur.buffer.modified = true;
+        match &mut cur.buffer.contents {
+            BufferContents::Text(rope) => {
                 rope.insert_char(cur.view.cursor, '\n');
-                cur.buffer.modified = true;
+            }
+            BufferContents::Hex(vec) => {
+                vec.splice(
+                    cur.view.cursor..=cur.view.cursor,
+                    [const { 0 }; 16].into_iter(),
+                );
             }
         }
     }
@@ -720,12 +714,18 @@ impl Action for Delete {
             return;
         }
 
-        match cur.buffer.contents {
-            BufferContents::Text(ref mut rope) => {
+        match &mut cur.buffer.contents {
+            BufferContents::Text(rope) => {
                 if rope
                     .try_remove(cur.view.cursor..cur.view.cursor + 1)
                     .is_ok()
                 {
+                    cur.buffer.modified = true;
+                }
+            }
+            BufferContents::Hex(vec) => {
+                if cur.view.cursor < vec.len() {
+                    vec.remove(cur.view.cursor);
                     cur.buffer.modified = true;
                 }
             }
@@ -755,13 +755,16 @@ impl Action for Backspace {
                     return;
                 }
 
-                match cur.buffer.contents {
-                    BufferContents::Text(ref mut rope) => {
+                cur.buffer.modified = true;
+                match &mut cur.buffer.contents {
+                    BufferContents::Text(rope) => {
                         rope.remove(cur.view.cursor - 1..cur.view.cursor);
-                        cur.buffer.modified = true;
-                        cur.jump_cursor(-1, 0);
+                    }
+                    BufferContents::Hex(vec) => {
+                        vec.remove(cur.view.cursor - 1);
                     }
                 }
+                cur.jump_cursor(-1, 0);
             }
             Mode::Command => {
                 if editor.command.len() >= 2 {
@@ -817,11 +820,16 @@ impl Layer for TypeChar {
             Mode::Insert { .. } => {
                 let mut cur = editor.current_mut();
 
+                cur.buffer.modified = true;
                 match cur.buffer.contents {
                     BufferContents::Text(ref mut rope) => {
                         rope.insert_char(cur.view.cursor, ch);
-                        cur.buffer.modified = true;
                         cur.jump_cursor(1, 0);
+                    }
+                    BufferContents::Hex(ref mut vec) => {
+                        let mut buf = [0u8, 0, 0, 0];
+                        let len = ch.encode_utf8(&mut buf).len();
+                        vec.splice(cur.view.cursor..=cur.view.cursor, buf.into_iter().take(len));
                     }
                 }
             }

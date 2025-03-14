@@ -13,6 +13,7 @@ use eyre::Result;
 
 pub mod args;
 pub mod buffer;
+pub mod bytes;
 pub mod editor;
 pub mod mode;
 pub mod tramp;
