@@ -68,6 +68,7 @@ pub fn all_actions() -> impl IntoIterator<Item = Arc<dyn Action>> {
         BufferPicker::arc(),
         //
         WhichKey::arc(),
+        HexMode::arc(),
     ]
 }
 
@@ -484,10 +485,7 @@ impl Action for InsertLineBelow {
                 rope.insert_char(cur.view.cursor, '\n');
             }
             BufferContents::Hex(vec) => {
-                vec.splice(
-                    cur.view.cursor..=cur.view.cursor,
-                    [const { 0 }; 16].into_iter(),
-                );
+                vec.splice(cur.view.cursor..cur.view.cursor, [const { 0 }; 16]);
             }
         }
         cur.jump_cursor(1, 0);
@@ -519,10 +517,7 @@ impl Action for InsertLineAbove {
                 rope.insert_char(cur.view.cursor, '\n');
             }
             BufferContents::Hex(vec) => {
-                vec.splice(
-                    cur.view.cursor..=cur.view.cursor,
-                    [const { 0 }; 16].into_iter(),
-                );
+                vec.splice(cur.view.cursor..cur.view.cursor, [const { 0 }; 16]);
             }
         }
     }
@@ -724,8 +719,8 @@ impl Action for Delete {
                 }
             }
             BufferContents::Hex(vec) => {
-                if cur.view.cursor < vec.len() {
-                    vec.remove(cur.view.cursor);
+                if cur.view.cursor < vec.len() * 2 {
+                    vec.remove(cur.view.cursor / 2);
                     cur.buffer.modified = true;
                 }
             }
@@ -761,7 +756,20 @@ impl Action for Backspace {
                         rope.remove(cur.view.cursor - 1..cur.view.cursor);
                     }
                     BufferContents::Hex(vec) => {
-                        vec.remove(cur.view.cursor - 1);
+                        if !cur.view.hex_missing_nibble {
+                            cur.view.hex_missing_nibble = true;
+
+                            vec[cur.view.cursor / 2] &=
+                                0xF << (4 * (cur.view.cursor % 2 == 0) as usize);
+                        } else {
+                            cur.view.hex_missing_nibble = false;
+                            vec.remove(cur.view.cursor / 2);
+                        }
+
+                        // vec.remove((cur.view.cursor - 1) / 2);
+                        // if cur.view.cursor % 2 == 0 {
+                        //     cur.jump_cursor(-1, 0);
+                        // }
                     }
                 }
                 cur.jump_cursor(-1, 0);
@@ -824,14 +832,26 @@ impl Layer for TypeChar {
                 match cur.buffer.contents {
                     BufferContents::Text(ref mut rope) => {
                         rope.insert_char(cur.view.cursor, ch);
-                        cur.jump_cursor(1, 0);
                     }
                     BufferContents::Hex(ref mut vec) => {
-                        let mut buf = [0u8, 0, 0, 0];
-                        let len = ch.encode_utf8(&mut buf).len();
-                        vec.splice(cur.view.cursor..=cur.view.cursor, buf.into_iter().take(len));
+                        if let Some(hex) = ch.to_digit(16) {
+                            let is_high = (cur.view.cursor % 2 == 0) as usize;
+                            let byte = (hex as u8) << (4 * is_high);
+
+                            if vec.len() * 2 <= cur.view.cursor {
+                                vec.push(0);
+                            }
+
+                            vec[cur.view.cursor / 2] &= 0xF << (4 * (1 - is_high));
+                            vec[cur.view.cursor / 2] |= byte;
+                        }
+
+                        // let mut buf = [0u8, 0, 0, 0];
+                        // let len = ch.encode_utf8(&mut buf).len();
+                        // vec.splice(cur.view.cursor..=cur.view.cursor, buf.into_iter().take(len));
                     }
                 }
+                cur.jump_cursor(1, 0);
             }
             Mode::Command => {
                 if ch == '\n' {
@@ -1277,5 +1297,32 @@ impl Action for WhichKey {
 
     fn run(&self, editor: &mut Editor) {
         editor.force_whichkey ^= true;
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
+pub struct HexMode;
+
+impl Action for HexMode {
+    fn name(&self) -> &str {
+        "hex-mode"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        let cur = editor.current_mut();
+        match &mut cur.buffer.contents {
+            BufferContents::Text(rope) => {
+                let new_cursor = rope.char_to_byte(cur.view.cursor);
+
+                let mut vec = Vec::new();
+                _ = rope.write_to(&mut vec);
+
+                cur.buffer.contents = BufferContents::Hex(vec);
+                cur.view.cursor = new_cursor;
+            }
+            BufferContents::Hex(..) => {}
+        }
     }
 }

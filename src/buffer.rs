@@ -42,32 +42,32 @@ impl Buffer {
         }
     }
 
-    pub fn open(path: &str) -> Result<Self> {
+    pub fn open(path: &str, utf8: bool) -> Result<Self> {
         if let Some((parts, file)) = path.rsplit_once(':') {
-            Ok(Self::open_remote(parts, file, path)?)
+            Ok(Self::open_remote(parts, file, path, utf8)?)
         } else {
-            Ok(Self::open_local(path)?)
+            Ok(Self::open_local(path, utf8)?)
         }
     }
 
-    pub fn open_remote(parts: &str, path: &str, name: &str) -> Result<Self> {
+    pub fn open_remote(parts: &str, path: &str, name: &str, utf8: bool) -> Result<Self> {
         let name = name.to_string().into();
 
         let mut conn = CONN_POOL.connect(parts)?;
         let file = conn.read_file(path)?;
-        let contents = Rope::from_reader(file)?;
+        let contents = BufferContents::read(file, utf8)?;
         let remote = conn.remote();
         CONN_POOL.recycle(conn);
 
         Ok(Self {
-            contents: BufferContents::Text(contents),
+            contents,
             name,
             inner: BufferInner::Remote { remote },
             modified: false,
         })
     }
 
-    pub fn open_local(path: &str) -> Result<Self> {
+    pub fn open_local(path: &str, utf8: bool) -> Result<Self> {
         let name = path.to_string().into();
 
         // first try opening in RW mode
@@ -81,7 +81,7 @@ impl Buffer {
             Err(other) => bail!(other),
             Ok(file) => {
                 return Ok(Self {
-                    contents: BufferContents::Text(Rope::from_reader(&file)?),
+                    contents: BufferContents::read(&file, utf8)?,
                     name,
                     inner: BufferInner::File {
                         inner: file,
@@ -103,7 +103,7 @@ impl Buffer {
             Err(other) => bail!(other),
             Ok(file) => {
                 return Ok(Self {
-                    contents: BufferContents::Text(Rope::from_reader(&file)?),
+                    contents: BufferContents::read(&file, utf8)?,
                     name,
                     inner: BufferInner::File {
                         inner: file,
@@ -202,6 +202,16 @@ impl BufferContents {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn read(mut reader: impl io::Read, utf8: bool) -> Result<Self> {
+        if utf8 {
+            Ok(Self::Text(Rope::from_reader(reader)?))
+        } else {
+            let mut buf = Vec::new();
+            reader.read_to_end(&mut buf)?; // FIXME: this is dumb
+            Ok(Self::Hex(buf))
+        }
     }
 
     pub fn write_to(&self, mut writer: impl io::Write) -> Result<usize> {

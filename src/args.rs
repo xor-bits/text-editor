@@ -7,4 +7,7 @@ use clap::Parser;
 pub struct Args {
     /// an initial file to be opened
     pub file: Option<String>,
+    /// open the initial file in hex mode
+    #[arg(long)]
+    pub hex: bool,
 }

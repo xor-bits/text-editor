@@ -27,7 +27,7 @@ fn main() -> Result<()> {
 
     let buffer = args
         .file
-        .map(|filename| Buffer::open(filename.as_str()))
+        .map(|filename| Buffer::open(filename.as_str(), !args.hex))
         .unwrap_or_else(|| Ok(Buffer::new_welcome()))
         .expect("FIXME: failed to open a file");
 

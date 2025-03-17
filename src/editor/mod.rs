@@ -383,7 +383,7 @@ impl Editor {
             }
         }
 
-        match Buffer::open(path) {
+        match Buffer::open(path, true) {
             Ok(buf) => {
                 let idx = self.buffers.len();
                 self.buffers.push(buf);
