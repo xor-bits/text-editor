@@ -374,23 +374,37 @@ impl Editor {
         BufferViewMut::new(&mut self.view, &mut self.buffers)
     }
 
-    pub fn open(&mut self, path: &str) {
+    pub fn find_opened(&self, path: &str) -> Option<usize> {
         // look for existing open buffers
         for (i, existing) in self.buffers.iter().enumerate() {
             if existing.name.as_ref() == path {
-                self.view = BufferView::new(i);
-                return;
+                return Some(i);
             }
+        }
+        None
+    }
+
+    pub fn switch_to(&mut self, i: usize) {
+        std::debug_assert!(i < self.buffers.len());
+        self.view = BufferView::new(i);
+    }
+
+    pub fn open(&mut self, path: &str) {
+        if let Some(i) = self.find_opened(path) {
+            self.switch_to(i);
+            return;
         }
 
         match Buffer::open(path) {
-            Ok(buf) => {
-                let idx = self.buffers.len();
-                self.buffers.push(buf);
-                self.view = BufferView::new(idx);
-            }
+            Ok(buf) => self.open_from(buf),
             Err(err) => tracing::error!("failed to open `{path}`: {err}"),
         }
+    }
+
+    pub fn open_from(&mut self, buf: Buffer) {
+        let idx = self.buffers.len();
+        self.buffers.push(buf);
+        self.view = BufferView::new(idx);
     }
 }
 

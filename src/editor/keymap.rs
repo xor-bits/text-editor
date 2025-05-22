@@ -443,6 +443,7 @@ static DEFAULT_NORMAL: LazyLock<Arc<dyn Layer>> = LazyLock::new(|| {
             "e":         act::MoveBufferEnd::arc(),
         },
         "space":     map! {
+            "n":         act::New::arc(),
             "space":     act::FileExplorer::arc(),
             "b":         act::BufferPicker::arc(),
         },

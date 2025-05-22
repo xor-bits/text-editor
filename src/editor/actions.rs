@@ -59,6 +59,7 @@ pub fn all_actions() -> impl IntoIterator<Item = Arc<dyn Action>> {
         NextSuggestion::arc(),
         PrevSuggestion::arc(),
         //
+        New::arc(),
         Open::arc(),
         BufferClose::arc(),
         BufferNext::arc(),
@@ -1062,6 +1063,25 @@ impl Action for PrevSuggestion {
 //
 
 #[derive(Debug, Default)]
+pub struct New;
+
+impl Action for New {
+    fn name(&self) -> &str {
+        "new"
+    }
+
+    fn description(&self) -> &str {
+        "create a new empty file"
+    }
+
+    fn run(&self, editor: &mut Editor) {
+        editor.open_from(Buffer::new());
+    }
+}
+
+//
+
+#[derive(Debug, Default)]
 pub struct Open;
 
 impl Action for Open {
@@ -1079,7 +1099,15 @@ impl Action for Open {
             return;
         };
 
-        editor.open(path.to_string().as_str()); // FIXME: lifetime error
+        if let Some(i) = editor.find_opened(path) {
+            editor.switch_to(i);
+            return;
+        }
+
+        match Buffer::open(path) {
+            Ok(buf) => editor.open_from(buf),
+            Err(err) => tracing::error!("failed to open `{path}`: {err}"),
+        }
     }
 }
 
