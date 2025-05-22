@@ -21,6 +21,8 @@ use super::theme;
 pub struct BufferView {
     pub buffer_index: usize,
     pub cursor: usize,
+    /// where the cursor X would be if the line wasn't too short
+    pub cursor_x_unclamp: usize,
     pub view_line: usize,
 }
 
@@ -29,6 +31,7 @@ impl BufferView {
         Self {
             buffer_index,
             cursor: 0,
+            cursor_x_unclamp: 0,
             view_line: 0,
         }
     }
@@ -283,6 +286,7 @@ impl BufferView {
 
         // delta Y from now on
         if delta_y == 0 || buffer.contents.len_lines() == 0 {
+            self.cursor_x_unclamp = 0;
             return;
         }
 
@@ -290,6 +294,7 @@ impl BufferView {
         let cursor_line = buffer.contents.char_to_line(self.cursor);
         let line_start = buffer.contents.line_to_char(cursor_line);
         let cursor_x = self.cursor - line_start;
+        self.cursor_x_unclamp = self.cursor_x_unclamp.max(cursor_x);
 
         let target_line = cursor_line
             .saturating_add_signed(delta_y)
@@ -302,7 +307,7 @@ impl BufferView {
 
         // place the cursor on the same X position or on the last char on the line
         let target_line_start = buffer.contents.line_to_char(target_line);
-        self.cursor = target_line_start + target_line_len.min(cursor_x);
+        self.cursor = target_line_start + target_line_len.min(self.cursor_x_unclamp);
     }
 
     pub fn jump_line_beg(&mut self, buffer: &Buffer) {
