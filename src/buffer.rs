@@ -98,10 +98,17 @@ impl TryFrom<&str> for Lang {
 pub struct Buffer {
     pub contents: Rope,
     pub name: Cow<'static, str>,
+    pub ty: ContentTransform,
     /// where the buffer is stored, if it even is
     pub inner: BufferInner,
     pub modified: bool,
     pub syntax: Option<Syntax>,
+}
+
+pub enum ContentTransform {
+    Utf8,
+    // Hex,
+    Nbt,
 }
 
 pub enum BufferInner {
@@ -115,6 +122,7 @@ impl Buffer {
     pub fn new() -> Self {
         Self {
             contents: Rope::new(),
+            ty: ContentTransform::Utf8,
             name: Cow::Borrowed("[scratch]"),
             inner: BufferInner::Scratch {
                 show_welcome: false,
@@ -127,6 +135,7 @@ impl Buffer {
     pub fn new_welcome() -> Self {
         Self {
             contents: Rope::new(),
+            ty: ContentTransform::Utf8,
             name: Cow::Borrowed("[scratch]"),
             inner: BufferInner::Scratch { show_welcome: true },
             modified: false,
@@ -155,6 +164,7 @@ impl Buffer {
 
         Ok(Self {
             contents,
+            ty: ContentTransform::Utf8,
             name,
             inner: BufferInner::Remote { remote },
             modified: false,
@@ -180,6 +190,7 @@ impl Buffer {
 
                 return Ok(Self {
                     contents,
+                    ty: ContentTransform::Utf8,
                     name,
                     inner: BufferInner::File {
                         inner: file,
@@ -206,6 +217,7 @@ impl Buffer {
 
                 return Ok(Self {
                     contents,
+                    ty: ContentTransform::Utf8,
                     name,
                     inner: BufferInner::File {
                         inner: file,
@@ -223,6 +235,7 @@ impl Buffer {
         // finally open it as a new file, without creating the file yet
         Ok(Self {
             contents,
+            ty: ContentTransform::Utf8,
             name,
             inner: BufferInner::NewFile { inner: path.into() },
             modified: false,
