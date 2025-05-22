@@ -900,7 +900,6 @@ dependencies = [
  "ratatui",
  "rexpect",
  "ropey",
- "tempfile",
  "tracing",
  "tracing-subscriber",
  "tree-sitter",

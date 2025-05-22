@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     fs,
-    io::{self, Seek},
+    io::{self, BufWriter, Seek, Write},
     ops::Range,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
@@ -114,7 +114,7 @@ pub enum ContentTransform {
 pub enum BufferInner {
     File { inner: fs::File, readonly: bool },
     NewFile { inner: PathBuf },
-    Remote { remote: Arc<[Part]> },
+    Remote { remote: Arc<[Part]>, readonly: bool },
     Scratch { show_welcome: bool },
 }
 
@@ -156,6 +156,7 @@ impl Buffer {
 
         let mut conn = CONN_POOL.connect(parts)?;
         let file = conn.read_file(path)?;
+
         let contents = Rope::from_reader(file)?;
         let remote = conn.remote();
         CONN_POOL.recycle(conn);
@@ -166,7 +167,10 @@ impl Buffer {
             contents,
             ty: ContentTransform::Utf8,
             name,
-            inner: BufferInner::Remote { remote },
+            inner: BufferInner::Remote {
+                remote,
+                readonly: false,
+            },
             modified: false,
             syntax,
         })
@@ -253,25 +257,36 @@ impl Buffer {
                     bail!("readonly");
                 }
 
-                inner.seek(io::SeekFrom::Start(0))?;
-                inner.set_len(self.contents.len_bytes() as u64)?;
-
-                self.contents.write_to(inner)?;
+                Self::write_to_file(&self.contents, &mut self.modified, inner)?;
             }
             BufferInner::NewFile { ref inner } => {
-                let new_file = fs::OpenOptions::new()
+                let mut new_file = fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
                     .open(inner)?;
 
-                self.contents.write_to(new_file)?;
+                Self::write_to_file(&self.contents, &mut self.modified, &mut new_file)?;
+
+                self.inner = BufferInner::File {
+                    inner: new_file,
+                    readonly: false,
+                };
             }
-            BufferInner::Remote { ref remote } => {
+            BufferInner::Remote {
+                ref remote,
+                readonly,
+            } => {
+                if readonly {
+                    bail!("readonly");
+                }
+
                 let (_, filename) = self.name.rsplit_once(':').unwrap();
 
                 let mut conn = CONN_POOL.connect_to(remote.clone())?;
                 let writer = conn.write_file(filename)?;
-                self.contents.write_to(writer)?;
+
+                Self::write_to(&self.contents, &mut self.modified, writer)?;
+
                 conn.finish_write_file(filename)?;
                 CONN_POOL.recycle(conn);
             }
@@ -284,6 +299,22 @@ impl Buffer {
         };
 
         self.modified = false;
+
+        Ok(())
+    }
+
+    fn write_to_file(contents: &Rope, modified: &mut bool, output: &mut fs::File) -> Result<()> {
+        output.seek(io::SeekFrom::Start(0))?;
+        output.set_len(contents.len_bytes() as u64)?;
+
+        Self::write_to(contents, modified, output)?;
+
+        Ok(())
+    }
+
+    fn write_to(contents: &Rope, modified: &mut bool, output: impl Write) -> Result<()> {
+        contents.write_to(BufWriter::new(output))?;
+        *modified = false;
 
         Ok(())
     }

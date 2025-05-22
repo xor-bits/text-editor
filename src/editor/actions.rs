@@ -1208,7 +1208,7 @@ impl Action for FileExplorer {
                 path.pop();
                 (path, None)
             }
-            BufferInner::Remote { remote } => {
+            BufferInner::Remote { remote, .. } => {
                 let mut path = PathBuf::from(
                     buf.name
                         .rsplit_once(':')

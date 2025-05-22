@@ -46,12 +46,74 @@ fn ts_logger() -> Option<Box<dyn FnMut(LogType, &str)>> {
     }))
 }
 
-fn logger_init() -> Result<()> {
-    let mut log_file_path = PathBuf::from("/tmp");
+fn tmpdir() -> PathBuf {
     if let Some(xdg_runtime_dir) = env::var_os("XDG_RUNTIME_DIR") {
-        log_file_path = PathBuf::from(xdg_runtime_dir);
+        PathBuf::from(xdg_runtime_dir).join("text-editor")
+    } else {
+        PathBuf::from("/tmp/text-editor")
     }
-    log_file_path = log_file_path.join("text-editor").join("latest.log");
+}
+
+/* fn tmpfile(name_hint: &str) -> Result<File> {
+    loop {
+        let mut filename = String::with_capacity(name_hint.len() + 9);
+        filename.push_str(name_hint);
+        filename.push('-');
+        for _ in 0..8 {
+            filename.push(random_alphanum() as char);
+        }
+
+        let mut path = crate::tmpdir();
+        path.push(filename);
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        match OpenOptions::new().create_new(true).open(path) {
+            Ok(file) => return Ok(file),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+            Err(other) => Err(other)?,
+        }
+    }
+}
+
+fn random_alphanum() -> u8 {
+    ALPHANUM_TABLE[rand::random_range(0u8..64u8) as usize]
+}
+
+const ALPHANUM_TABLE: [u8; 64] = {
+    let mut alpha_table: [u8; 64] = [0u8; 64];
+    let mut i: usize = 0;
+
+    let mut ch = b'0';
+    while ch <= b'9' {
+        ch += 1;
+        i += 1;
+        alpha_table[i] = ch;
+    }
+
+    ch = b'a';
+    while ch <= b'z' {
+        ch += 1;
+        i += 1;
+        alpha_table[i] = ch;
+    }
+
+    ch = b'A';
+    while ch <= b'Z' {
+        ch += 1;
+        i += 1;
+        alpha_table[i] = ch;
+    }
+
+    alpha_table
+}; */
+
+fn logger_init() -> Result<()> {
+    let mut log_file_path = tmpdir();
+    log_file_path.push("log");
+    log_file_path.push("latest.log");
 
     if let Some(parent) = log_file_path.parent() {
         fs::create_dir_all(parent)?;
