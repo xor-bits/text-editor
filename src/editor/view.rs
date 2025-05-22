@@ -131,7 +131,12 @@ impl BufferView {
                 .root_node()
                 .descendant_for_byte_range(self.cursor, self.cursor)
         }) {
-            tracing::debug!("cursor ast node kind: {}", cursor_node.kind());
+            // let s: &str = cursor_node.grammar_name();
+            tracing::debug!(
+                "cursor ast node name={} kind={}",
+                cursor_node.grammar_name(),
+                cursor_node.kind()
+            );
         }
 
         ((row, col), (real_cursor_row, real_cursor_col))
@@ -139,9 +144,9 @@ impl BufferView {
 
     fn render_welcome(&mut self, area: Rect, frame: &mut Frame) {
         let [_, area, _] = Layout::vertical([
-            Constraint::Percentage(50),
-            Constraint::Length(10),
-            Constraint::Percentage(50),
+            Constraint::Fill(1),
+            Constraint::Length(11),
+            Constraint::Fill(1),
         ])
         .areas(area);
 
