@@ -2,11 +2,12 @@ use std::{cmp::Ordering, env};
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::Style,
+    style::{Color, Style},
     text::Line,
     widgets::{Block, Paragraph, Widget},
     Frame,
 };
+// use unicode_segmentation::GraphemeCursor;
 
 use crate::{
     buffer::{Buffer, BufferInner},
@@ -123,6 +124,15 @@ impl BufferView {
 
         let real_cursor_row = row - self.view_line + buffer_area.y as usize;
         let real_cursor_col = col + buffer_area.x as usize;
+
+        if let Some(cursor_node) = buffer.syntax.as_ref().and_then(|syntax| {
+            syntax
+                .tree
+                .root_node()
+                .descendant_for_byte_range(self.cursor, self.cursor)
+        }) {
+            tracing::debug!("cursor ast node kind: {}", cursor_node.kind());
+        }
 
         ((row, col), (real_cursor_row, real_cursor_col))
     }
@@ -323,22 +333,91 @@ struct BufferWidget<'a> {
 
 impl Widget for BufferWidget<'_> {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
-        for (y, line) in self
-            .buffer
-            .contents
-            .get_lines_at(self.line)
-            .into_iter()
-            .flatten()
-            .take(area.height as usize)
-            .enumerate()
-        {
-            for (x, ch) in line
-                .chars()
-                .take(area.width as usize)
-                .filter(|ch| *ch != '\n' && *ch != '\r')
-                .enumerate()
-            {
-                buf[(area.x + x as u16, area.y + y as u16)].set_char(ch);
+        // buf.content.fill(
+        //     ratatui::buffer::Cell::new(" ")
+        //         .set_fg(Color::Reset)
+        //         .set_bg(theme::BACKGROUND)
+        //         .clone(),
+        // );
+
+        let len = self.buffer.contents.len_bytes();
+        if len == 0 {
+            return;
+        }
+
+        // let last_byte = len - 1;
+
+        'lines: for y in 0..area.height as usize {
+            // for x in 0..area.width as usize {
+            //     buf[(area.x + x as u16, area.y + y as u16)]
+            //         .set_char('x')
+            //         .set_fg(Color::Indexed(((x + y * area.width as usize) & 255) as u8))
+            //         .set_bg(theme::BACKGROUND);
+            // }
+            // continue;
+
+            let Ok(start_byte) = self.buffer.contents.try_line_to_byte(self.line + y) else {
+                break;
+            };
+            let Some(line) = self.buffer.contents.get_line(self.line + y) else {
+                break;
+            };
+            if line.len_bytes() == 0 {
+                continue;
+            }
+            // let end_byte = line.len_bytes() - 1 + start_byte;
+
+            // let mut line_grapheme_cursor = GraphemeCursor::new(0, line.len_bytes(), true);
+            // let mut x: usize = 0;
+            // let mut byte_x: usize = 0;
+
+            let Some((chunks, mut chunk_byte_idx, _, _)) = line.get_chunks_at_byte(0) else {
+                break;
+            };
+
+            for chunk in chunks {
+                // chunk_char_idx += chunk.chars().count();
+                // line_grapheme_cursor.next_boundary(chunk, chunk_start)
+
+                for (byte_offs, ch) in chunk.char_indices() {
+                    if ch == '\n' || ch == '\r' {
+                        continue;
+                    }
+
+                    if byte_offs + chunk_byte_idx >= buf.area.width as usize {
+                        continue 'lines;
+                    }
+                    if y >= buf.area.height as usize {
+                        break 'lines;
+                    }
+
+                    let fg: Color = self
+                        .buffer
+                        .syntax
+                        .as_ref()
+                        .map(|syntax| syntax.tree.root_node())
+                        .and_then(|root_node| {
+                            root_node.descendant_for_byte_range(
+                                start_byte + byte_offs + chunk_byte_idx,
+                                start_byte + byte_offs + chunk_byte_idx,
+                            )
+                        })
+                        .map_or(Color::Reset, |node| {
+                            // node.descendant_for_byte_range(start, end)
+
+                            Color::Indexed((node.kind_id() & 255) as u8)
+                        });
+
+                    buf[(
+                        area.x + byte_offs as u16 + chunk_byte_idx as u16,
+                        area.y + y as u16,
+                    )]
+                        .set_char(ch)
+                        .set_fg(fg)
+                        .set_bg(theme::BACKGROUND);
+                }
+
+                chunk_byte_idx += chunk.len();
             }
         }
     }

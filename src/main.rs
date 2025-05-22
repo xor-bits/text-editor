@@ -8,6 +8,7 @@ use std::{
 use self::{args::Args, buffer::Buffer, editor::Editor};
 use clap::Parser;
 use eyre::Result;
+use tree_sitter::LogType;
 
 //
 
@@ -36,6 +37,13 @@ fn main() -> Result<()> {
     editor.run(terminal);
 
     Ok(())
+}
+
+fn ts_logger() -> Option<Box<dyn FnMut(LogType, &str)>> {
+    Some(Box::new(|ty, msg| {
+        _ = (ty, msg);
+        // tracing::debug!("tree-sitter ({ty:?}): {msg}");
+    }))
 }
 
 fn logger_init() -> Result<()> {

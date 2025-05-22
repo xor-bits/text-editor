@@ -487,8 +487,8 @@ impl Action for InsertLineBelow {
         editor.mode = Mode::Insert { append: true };
         let mut cur = editor.current_mut();
         cur.jump_line_end();
-        cur.buffer.contents.insert_char(cur.view.cursor, '\n');
-        cur.buffer.modified = true;
+        cur.jump_cursor(1, 0);
+        cur.buffer.insert_text_at(cur.view.cursor, "\n");
         cur.jump_cursor(1, 0);
     }
 }
@@ -511,8 +511,7 @@ impl Action for InsertLineAbove {
         editor.mode = Mode::Insert { append: true };
         let mut cur = editor.current_mut();
         cur.jump_line_beg();
-        cur.buffer.contents.insert_char(cur.view.cursor, '\n');
-        cur.buffer.modified = true;
+        cur.buffer.insert_text_at(cur.view.cursor, "\n");
     }
 }
 
@@ -702,14 +701,8 @@ impl Action for Delete {
             return;
         }
 
-        if cur
-            .buffer
-            .contents
-            .try_remove(cur.view.cursor..cur.view.cursor + 1)
-            .is_ok()
-        {
-            cur.buffer.modified = true;
-        }
+        cur.buffer
+            .replace_text_at(cur.view.cursor..cur.view.cursor + 1, "");
     }
 }
 
@@ -736,9 +729,7 @@ impl Action for Backspace {
                 }
 
                 cur.buffer
-                    .contents
-                    .remove(cur.view.cursor - 1..cur.view.cursor);
-                cur.buffer.modified = true;
+                    .replace_text_at(cur.view.cursor - 1..cur.view.cursor, "");
                 cur.jump_cursor(-1, 0);
             }
             Mode::Command => {
@@ -794,8 +785,7 @@ impl Layer for TypeChar {
         match editor.mode {
             Mode::Insert { .. } => {
                 let mut cur = editor.current_mut();
-                cur.buffer.contents.insert_char(cur.view.cursor, ch);
-                cur.buffer.modified = true;
+                cur.buffer.insert_char_at(cur.view.cursor, ch);
                 cur.jump_cursor(1, 0);
             }
             Mode::Command => {
