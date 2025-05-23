@@ -1,11 +1,12 @@
 use eyre::{bail, eyre, Result};
-use rexpect::session::PtySession;
+use rexpect::{process::signal, session::PtySession};
 use std::{
     collections::HashMap,
     fmt,
     io::{self, Cursor, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
+    time::Instant,
 };
 
 //
@@ -156,6 +157,7 @@ impl Connection {
 
     /// run a command and test the exit code
     pub fn run_cmd_checked(&mut self, cmd: fmt::Arguments) -> Result<String> {
+        let now = Instant::now();
         self.run_cmd(cmd)?;
         self.run_cmd(format_args!("echo $?"))?;
 
@@ -170,6 +172,7 @@ impl Connection {
             );
         }
 
+        tracing::debug!("cmd took {:?}", now.elapsed());
         Ok(result)
     }
 
@@ -178,13 +181,22 @@ impl Connection {
         tracing::trace!("running '{cmd}'");
         self.shell.writer.write_fmt(cmd)?;
         self.shell.writer.write_all(b"\n")?;
+        self.shell.writer.flush()?;
         Ok(())
     }
 
     /// wait for the prompt indicator
     pub fn wait(&mut self) -> Result<String> {
         tracing::trace!("waiting for __sh_prompt");
-        Ok(self.shell.exp_string("__sh_prompt")?)
+        for _ in 0..30_000 {
+            match self.shell.exp_string("__sh_prompt") {
+                Err(rexpect::error::Error::Timeout { .. }) => {}
+                other => return Ok(other?),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        bail!("Expected \"__sh_prompt\" but got \"\" (after waiting for 30000 ms)");
     }
 
     pub fn canonicalize(&mut self, path: &Path) -> Result<PathBuf> {
@@ -262,11 +274,13 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        while self.shell.send_line("exit").is_ok() && self.shell.read_line().is_ok() {
-            // self.shell.process.kill(sig)
-        }
-        // self.shell.process.set_kill_timeout(Some(100));
-        // self.shell.process.kill(signal::SIGTERM);
+        // self.shell.process.kill(sig)
+        // while self.shell.send_line("exit").is_ok() {
+        //     _ = self.shell.read_line();
+        //     // self.shell.process.kill(sig)
+        // }
+        self.shell.process.set_kill_timeout(Some(0));
+        _ = self.shell.process.kill(signal::SIGTERM);
     }
 }
 
@@ -359,7 +373,7 @@ impl ConnectionPool {
 
         let mut conn = Connection {
             remote,
-            shell: rexpect::spawn("env PS1=__sh_prompt TERM=dumb sh", Some(30_000))?,
+            shell: rexpect::spawn("env PS1=__sh_prompt TERM=dumb sh", Some(0))?,
         };
         conn.wait()?;
 
