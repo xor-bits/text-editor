@@ -1223,10 +1223,8 @@ impl Action for FileExplorer {
                         .unwrap_or(buf.name.as_ref())
                         .to_string(),
                 );
-                let res = conn.canonicalize(&path);
-                CONN_POOL.recycle(conn);
 
-                let mut path = match res {
+                let mut path = match conn.canonicalize(&path) {
                     Ok(path) => path,
                     Err(err) => {
                         editor.status.clear();

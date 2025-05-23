@@ -162,9 +162,8 @@ impl Buffer {
         askpw_tx: Sender<(String, Sender<String>)>,
     ) -> Result<Self> {
         let mut conn = CONN_POOL.connect(parts, askpw_tx)?;
-        let res = Self::open_remote_with(&mut conn, path, name);
-        CONN_POOL.recycle(conn);
-        res
+        let buf = Self::open_remote_with(&mut conn, path, name)?;
+        Ok(buf)
     }
 
     pub fn open_remote_with(conn: &mut Connection, path: &str, name: &str) -> Result<Self> {
@@ -466,7 +465,6 @@ impl Buffer {
                 Self::write_to(&self.contents, self.ty, &mut self.modified, writer)?;
 
                 conn.finish_write_file(filename)?;
-                CONN_POOL.recycle(conn);
             }
             BufferInner::Scratch {
                 ref mut show_welcome,

@@ -4,6 +4,8 @@ use std::{
     collections::HashMap,
     fmt,
     io::{self, Cursor, Write},
+    mem::ManuallyDrop,
+    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::{
         mpsc::{channel, Sender},
@@ -110,6 +112,32 @@ impl Str {
 
     pub fn as_str(self, pool: &str) -> &str {
         &pool[self.start as usize..][..self.len as usize]
+    }
+}
+
+pub struct ConnectionHandle<'a> {
+    inner: ManuallyDrop<Connection>,
+    pool: &'a ConnectionPool,
+}
+
+impl Deref for ConnectionHandle<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for ConnectionHandle<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl Drop for ConnectionHandle<'_> {
+    fn drop(&mut self) {
+        self.pool
+            .recycle(unsafe { ManuallyDrop::take(&mut self.inner) });
     }
 }
 
@@ -391,11 +419,11 @@ impl ConnectionPool {
         Part::print(&string_pool, remote, path)
     }
 
-    pub fn connect(
-        &self,
+    pub fn connect<'a>(
+        &'a self,
         remote: &str,
         askpw_tx: Sender<(String, Sender<String>)>,
-    ) -> Result<Connection> {
+    ) -> Result<ConnectionHandle<'a>> {
         let mut string_pool = self
             .string_pool
             .write()
@@ -411,18 +439,21 @@ impl ConnectionPool {
         self.connect_to(remote, askpw_tx)
     }
 
-    pub fn connect_to(
-        &self,
+    pub fn connect_to<'a>(
+        &'a self,
         remote: Arc<[Part]>,
         askpw_tx: Sender<(String, Sender<String>)>,
-    ) -> Result<Connection> {
+    ) -> Result<ConnectionHandle<'a>> {
         let mut connections = self
             .connections
             .lock()
             .unwrap_or_else(|err| err.into_inner());
         if let Some(cache) = connections.get_mut(&remote) {
             if let Some(conn) = cache.pop() {
-                return Ok(conn);
+                return Ok(ConnectionHandle {
+                    inner: ManuallyDrop::new(conn),
+                    pool: self,
+                });
             }
         }
 
@@ -462,10 +493,13 @@ impl ConnectionPool {
 
         tracing::trace!("connected");
 
-        Ok(conn)
+        Ok(ConnectionHandle {
+            inner: ManuallyDrop::new(conn),
+            pool: self,
+        })
     }
 
-    pub fn recycle(&self, conn: Connection) {
+    fn recycle(&self, conn: Connection) {
         let mut connections = self
             .connections
             .lock()
