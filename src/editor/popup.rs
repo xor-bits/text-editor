@@ -217,7 +217,7 @@ impl Popup {
                 let w = (path.len() + 15).min(u16::MAX as usize) as u16;
                 let h = 3;
 
-                let [_, area, _] = Layout::vertical([
+                let [_, area, _] = Layout::horizontal([
                     Constraint::Fill(1),
                     Constraint::Length(w),
                     Constraint::Fill(1),
