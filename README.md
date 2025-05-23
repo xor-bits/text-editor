@@ -55,3 +55,4 @@ text-editor ssh:user1@host1|ssh:user2@host2:file
  - [ ] text-editor configuration
  - [x] syntax highlighting
  - [ ] LSP
+ - [ ] search
