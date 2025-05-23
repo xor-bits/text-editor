@@ -3,7 +3,7 @@ use std::{env, path::PathBuf, sync::Arc};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::{
-    buffer::{Buffer, BufferInner},
+    buffer::{Buffer, BufferInner, CONN_POOL},
     editor::{
         keymap::{Code, Entry, Layer},
         popup::Popup,
@@ -1212,13 +1212,30 @@ impl Action for FileExplorer {
                 (path, None)
             }
             BufferInner::Remote { remote, .. } => {
-                let mut path = PathBuf::from(
+                let mut conn = CONN_POOL
+                    .connect_to(remote.clone(), editor.open_askpw_tx.clone())
+                    .unwrap();
+
+                let path = PathBuf::from(
                     buf.name
                         .rsplit_once(':')
                         .map(|(_, path)| path)
                         .unwrap_or(buf.name.as_ref())
                         .to_string(),
                 );
+                let res = conn.canonicalize(&path);
+                CONN_POOL.recycle(conn);
+
+                let mut path = match res {
+                    Ok(path) => path,
+                    Err(err) => {
+                        editor.status.clear();
+                        use std::fmt::Write;
+                        _ = write!(&mut editor.status, "failed to get parent path {err}");
+                        editor.status_is_error = true;
+                        return;
+                    }
+                };
                 path.pop();
                 (path, Some(remote.clone()))
             }
