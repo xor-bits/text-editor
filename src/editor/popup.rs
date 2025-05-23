@@ -263,7 +263,11 @@ impl Popup {
                     } else {
                         match cwd.as_os_str().to_str() {
                             Some(path) => {
-                                editor.open(path);
+                                if let Some(remote) = remote {
+                                    editor.open(&CONN_POOL.path_of(remote, path));
+                                } else {
+                                    editor.open(path);
+                                }
                                 Popup::None
                             }
                             None => {

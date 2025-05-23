@@ -108,6 +108,10 @@ impl Str {
             }
         }
     }
+
+    pub fn as_str(self, pool: &str) -> &str {
+        &pool[self.start as usize..][..self.len as usize]
+    }
 }
 
 /// a single threaded connection instance
@@ -283,6 +287,47 @@ impl ConnectionPool {
             string_pool: RwLock::new(String::new()),
             connections: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn path_of(&self, remote: &[Part], path: &str) -> String {
+        let string_pool = self
+            .string_pool
+            .read()
+            .unwrap_or_else(|err| err.into_inner());
+
+        let mut buf = String::new();
+        use std::fmt::Write;
+
+        for part in remote {
+            match part {
+                Part::Ssh {
+                    destination,
+                    port,
+                    askpw,
+                } => {
+                    _ = write!(
+                        &mut buf,
+                        "ssh:{}:{port}{}",
+                        destination.as_str(&string_pool),
+                        if *askpw { ":askpw" } else { "" }
+                    );
+                }
+                Part::Docker { container } => {
+                    _ = write!(&mut buf, "ssh:{}", container.as_str(&string_pool),);
+                }
+                Part::Sudo { askpw } => {
+                    _ = write!(&mut buf, "sudo:{}", if *askpw { ":askpw" } else { "" });
+                }
+                Part::Bash {} => {
+                    _ = write!(&mut buf, "bash");
+                }
+            }
+        }
+
+        buf.push(':');
+        buf.push_str(path);
+
+        buf
     }
 
     pub fn connect(&self, remote: &str) -> Result<Connection> {

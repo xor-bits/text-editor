@@ -11,7 +11,7 @@ use eyre::{bail, Result};
 use ropey::{Rope, RopeSlice};
 use tree_sitter::{InputEdit, Language, Parser, Point, Tree};
 
-use crate::tramp::{ConnectionPool, Part};
+use crate::tramp::{Connection, ConnectionPool, Part};
 
 //
 
@@ -153,16 +153,23 @@ impl Buffer {
     }
 
     pub fn open_remote(parts: &str, path: &str, name: &str) -> Result<Self> {
+        let mut conn = CONN_POOL.connect(parts)?;
+        let res = Self::open_remote_with(&mut conn, path, name);
+        CONN_POOL.recycle(conn);
+        res
+    }
+
+    pub fn open_remote_with(conn: &mut Connection, path: &str, name: &str) -> Result<Self> {
         let name = name.to_string().into();
 
-        let mut conn = CONN_POOL.connect(parts)?;
         let mut file = conn.read_file(path)?;
 
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)?;
 
+        tracing::debug!("remote returned {} bytes", contents.len());
+
         let remote = conn.remote();
-        CONN_POOL.recycle(conn);
 
         let (contents, syntax, ty) = Self::read_from(&contents, path);
 
@@ -218,7 +225,7 @@ impl Buffer {
             .create(false)
             .open(path)
         {
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(other) => bail!(other),
             Ok(mut file) => {
                 let mut contents = Vec::new();
