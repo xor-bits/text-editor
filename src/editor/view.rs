@@ -317,12 +317,19 @@ impl BufferView {
     }
 
     pub fn jump_line_end(&mut self, buffer: &Buffer) {
-        let line = buffer.contents.char_to_line(self.cursor);
-        let line_len = buffer.contents.line(line).len_chars();
+        let line_idx = buffer.contents.char_to_line(self.cursor);
+        let mut line = buffer.contents.line(line_idx);
+        while matches!(
+            line.get_char(line.len_chars().saturating_sub(1)),
+            Some('\n' | '\r')
+        ) {
+            line = line.slice(0..line.len_chars() - 1)
+        }
+
         self.cursor = buffer
             .contents
             .len_chars()
-            .min((buffer.contents.line_to_char(line) + line_len).saturating_sub(2));
+            .min(buffer.contents.line_to_char(line_idx) + line.len_chars().saturating_sub(1));
     }
 
     pub fn jump_beg(&mut self) {
