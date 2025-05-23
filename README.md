@@ -28,8 +28,11 @@ text-editor ssh:user1@host1|ssh:user2@host2:file
 
 ## Screenshots
 
-### normal file editing
-![image](https://github.com/user-attachments/assets/76125b4c-1795-4a58-a3bd-ea58ffbc4408)
+### normal file editing and which-key
+![image](https://github.com/user-attachments/assets/0e5fb113-7f80-474a-9b8e-1f55db3cfe26)
+
+### NBT file editing over SSH
+![image](https://github.com/user-attachments/assets/90931fa2-d80e-4c0c-ad1d-d849acdbbfc4)
 
 ### file explorer and editor over ssh
 ![image](https://github.com/user-attachments/assets/15d27e2b-8e1b-4caf-877f-b7e16dafac07)
@@ -47,8 +50,8 @@ text-editor ssh:user1@host1|ssh:user2@host2:file
  - [x] buffer picker
  - [x] welcome message
  - [ ] selections
- - [ ] hex editor
- - [ ] NBT editor
+ - [x] hex editor
+ - [x] NBT editor
  - [ ] text-editor configuration
- - [ ] syntax highlighting
+ - [x] syntax highlighting
  - [ ] LSP
