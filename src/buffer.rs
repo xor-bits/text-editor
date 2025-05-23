@@ -69,12 +69,14 @@ impl Syntax {
 #[derive(Debug, Clone, Copy)]
 pub enum Lang {
     Rust,
+    Zig,
 }
 
 impl Lang {
     pub fn ts_language(self) -> Language {
         match self {
             Self::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Self::Zig => tree_sitter_zig::LANGUAGE.into(),
         }
     }
 }
@@ -88,6 +90,7 @@ impl TryFrom<&str> for Lang {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "rs" => Ok(Self::Rust),
+            "zig" => Ok(Self::Zig),
             _ => Err(UnknownLanguage),
         }
     }
