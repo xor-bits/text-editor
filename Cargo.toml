@@ -28,3 +28,4 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tree-sitter = "0.25.4"
 tree-sitter-rust = "0.23"
 tree-sitter-zig = "1.1.2"
+tree-sitter-c = "0.23.4"

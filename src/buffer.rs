@@ -70,6 +70,7 @@ impl Syntax {
 pub enum Lang {
     Rust,
     Zig,
+    C,
 }
 
 impl Lang {
@@ -77,6 +78,7 @@ impl Lang {
         match self {
             Self::Rust => tree_sitter_rust::LANGUAGE.into(),
             Self::Zig => tree_sitter_zig::LANGUAGE.into(),
+            Self::C => tree_sitter_c::LANGUAGE.into(),
         }
     }
 }
