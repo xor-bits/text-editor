@@ -369,7 +369,7 @@ dependencies = [
 [[package]]
 name = "fastnbt"
 version = "2.5.0"
-source = "git+https://github.com/xor-bits/fastnbt#6c28feeba00fd1ae348dd9939949d7267c028c4b"
+source = "git+https://github.com/xor-bits/fastnbt#78e54c6c4d659efcdec94e4e5665ce2c8ce1331f"
 dependencies = [
  "byteorder",
  "cesu8",
@@ -386,7 +386,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 [[package]]
 name = "fastsnbt"
 version = "0.2.0"
-source = "git+https://github.com/xor-bits/fastnbt#6c28feeba00fd1ae348dd9939949d7267c028c4b"
+source = "git+https://github.com/xor-bits/fastnbt#78e54c6c4d659efcdec94e4e5665ce2c8ce1331f"
 dependencies = [
  "byteorder",
  "itoa",
