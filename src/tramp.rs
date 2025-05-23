@@ -1,5 +1,5 @@
 use eyre::{bail, eyre, Result};
-use rexpect::{process::signal, session::PtySession};
+use rexpect::{process::signal, reader::Regex, session::PtySession, ReadUntil};
 use std::{
     collections::HashMap,
     fmt,
@@ -13,17 +13,9 @@ use std::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Part {
-    Ssh {
-        destination: Str,
-        port: u16,
-        askpw: bool,
-    },
-    Docker {
-        container: Str,
-    },
-    Sudo {
-        askpw: bool,
-    },
+    Ssh { destination: Str, port: u16 },
+    Docker { container: Str },
+    Sudo {},
     Bash {},
 }
 
@@ -35,7 +27,6 @@ impl Part {
         match proto_id {
             "ssh" => {
                 let mut port = 22;
-                let mut askpw = false;
 
                 // 1st arg is the destination
                 let destination = args
@@ -45,34 +36,12 @@ impl Part {
 
                 // 2nd arg (optional) is either the port or askpw
                 if let Some(a2) = args.next() {
-                    if a2 == "askpw" {
-                        askpw = true;
-                    } else if let Ok(_port) = a2.parse::<u16>() {
-                        port = _port;
-                    }
+                    port = a2.parse::<u16>()?;
                 }
 
-                // 3rd arg (optional) is askpw
-                if Some("askpw") == args.next() {
-                    askpw = true;
-                }
-
-                Ok(Self::Ssh {
-                    destination,
-                    port,
-                    askpw,
-                })
+                Ok(Self::Ssh { destination, port })
             }
-            "sudo" => {
-                let mut askpw = false;
-
-                // 1st arg (optional) is askpw
-                if Some("askpw") == args.next() {
-                    askpw = true;
-                }
-
-                Ok(Self::Sudo { askpw })
-            }
+            "sudo" => Ok(Self::Sudo {}),
             "docker" => {
                 let container = args
                     .next()
@@ -124,22 +93,21 @@ pub struct Connection {
 
 impl Connection {
     /// jump over ssh
-    pub fn hop_ssh(&mut self, destination: &str, port: u16, askpw: bool) -> Result<()> {
+    pub fn hop_ssh(&mut self, destination: &str, port: u16) -> Result<()> {
         // FIXME: sanitation
-        _ = askpw;
-        self.run_cmd_checked(format_args!(
+        self.run_cmd_askpw_checked(Regex::new("[a-z][-a-z0-9_]*\\$?@(([a-zA-Z]|[a-zA-Z][a-zA-Z0-9\\-]*[a-zA-Z0-9])\\.)*([A-Za-z]|[A-Za-z][A-Za-z0-9\\-]*[A-Za-z0-9])'s password:").unwrap(), format_args!(
             "ssh -p {port} -t -t '{destination}' env PS1=__sh_prompt TERM=dumb sh"
         ))?;
         Ok(())
     }
 
     /// elevate privileges
-    pub fn hop_sudo(&mut self, askpw: bool) -> Result<()> {
+    pub fn hop_sudo(&mut self) -> Result<()> {
         // FIXME: sanitation
-        _ = askpw;
-        self.run_cmd_checked(format_args!(
-            "sudo -S -p '__sudo_askpw' env PS1=__sh_prompt TERM=dumb sh"
-        ))?;
+        self.run_cmd_askpw_checked(
+            Regex::new("__sh_pw_prompt").unwrap(),
+            format_args!("sudo -S -p '__sh_pw_prompt' env PS1=__sh_prompt TERM=dumb sh"),
+        )?;
         Ok(())
     }
 
@@ -150,8 +118,8 @@ impl Connection {
         ))?;
         self.run_cmd(format_args!("stty -echoctl"))?;
         self.run_cmd(format_args!("stty -echo"))?;
-        self.wait()?;
-        self.wait()?;
+        self.wait(None)?;
+        self.wait(None)?;
         Ok(())
     }
 
@@ -161,8 +129,37 @@ impl Connection {
         self.run_cmd(cmd)?;
         self.run_cmd(format_args!("echo $?"))?;
 
-        let result = self.wait()?;
-        let exit_code = self.wait()?;
+        let (result, _) = self.wait(None)?;
+        let (exit_code, _) = self.wait(None)?;
+        tracing::debug!("checked command complete");
+        let exit_code = exit_code.trim();
+        if exit_code != "0" {
+            bail!(
+                "command failed with: '{}' exit code '{exit_code:?}'",
+                result.trim()
+            );
+        }
+
+        tracing::debug!("cmd took {:?}", now.elapsed());
+        Ok(result)
+    }
+
+    /// run a command and test the exit code
+    pub fn run_cmd_askpw_checked(
+        &mut self,
+        askpw_needle: Regex,
+        cmd: fmt::Arguments,
+    ) -> Result<String> {
+        let now = Instant::now();
+        self.run_cmd(cmd)?;
+        let (result, askpw) = self.wait(Some(askpw_needle))?;
+
+        if let Some(askpw) = askpw {
+            todo!("got askpw '{askpw}'");
+        }
+
+        self.run_cmd(format_args!("echo $?"))?;
+        let (exit_code, _) = self.wait(None)?;
         tracing::debug!("checked command complete");
         let exit_code = exit_code.trim();
         if exit_code != "0" {
@@ -186,10 +183,23 @@ impl Connection {
     }
 
     /// wait for the prompt indicator
-    pub fn wait(&mut self) -> Result<String> {
-        tracing::trace!("waiting for __sh_prompt");
+    pub fn wait(&mut self, incorrect: Option<Regex>) -> Result<(String, Option<String>)> {
+        tracing::trace!("waiting for __sh_prompt or __sh_pw_prompt");
         for _ in 0..30_000 {
-            match self.shell.exp_string("__sh_prompt") {
+            // FIXME: fork rexpect and fix this Vec of Strings by value madness
+
+            let res = if let Some(incorrect) = incorrect.clone() {
+                self.shell
+                    .exp_any(vec![
+                        ReadUntil::String("__sh_prompt".to_string()),
+                        ReadUntil::Regex(incorrect),
+                    ])
+                    .map(|(result, needle)| (result, (needle != "__sh_prompt").then_some(needle)))
+            } else {
+                self.shell.exp_string("__sh_prompt").map(|s| (s, None))
+            };
+
+            match res {
                 Err(rexpect::error::Error::Timeout { .. }) => {}
                 other => return Ok(other?),
             }
@@ -314,31 +324,21 @@ impl ConnectionPool {
 
         for part in remote {
             match part {
-                Part::Ssh {
-                    destination,
-                    port,
-                    askpw,
-                } => {
-                    _ = write!(
-                        &mut buf,
-                        "ssh:{}:{port}{}",
-                        destination.as_str(&string_pool),
-                        if *askpw { ":askpw" } else { "" }
-                    );
+                Part::Ssh { destination, port } => {
+                    _ = write!(&mut buf, "ssh:{}:{port}:", destination.as_str(&string_pool),);
                 }
                 Part::Docker { container } => {
-                    _ = write!(&mut buf, "ssh:{}", container.as_str(&string_pool),);
+                    _ = write!(&mut buf, "ssh:{}:", container.as_str(&string_pool),);
                 }
-                Part::Sudo { askpw } => {
-                    _ = write!(&mut buf, "sudo:{}", if *askpw { ":askpw" } else { "" });
+                Part::Sudo {} => {
+                    _ = write!(&mut buf, "sudo:");
                 }
                 Part::Bash {} => {
-                    _ = write!(&mut buf, "bash");
+                    _ = write!(&mut buf, "bash:");
                 }
             }
         }
 
-        buf.push(':');
         buf.push_str(path);
 
         buf
@@ -375,7 +375,7 @@ impl ConnectionPool {
             remote,
             shell: rexpect::spawn("env PS1=__sh_prompt TERM=dumb sh", Some(0))?,
         };
-        conn.wait()?;
+        conn.wait(None)?;
 
         let string_pool = self
             .string_pool
@@ -386,23 +386,14 @@ impl ConnectionPool {
             tracing::trace!("hop: {part:?}");
 
             match part {
-                Part::Ssh {
-                    destination,
-                    port,
-                    askpw,
-                } => {
-                    let destination =
-                        &string_pool[destination.start as usize..][..destination.len as usize];
-
-                    conn.hop_ssh(destination, *port, *askpw)?;
+                Part::Ssh { destination, port } => {
+                    conn.hop_ssh(destination.as_str(&string_pool), *port)?;
                 }
-                Part::Sudo { askpw } => {
-                    conn.hop_sudo(*askpw)?;
+                Part::Sudo {} => {
+                    conn.hop_sudo()?;
                 }
                 Part::Docker { container } => {
-                    let container =
-                        &string_pool[container.start as usize..][..container.len as usize];
-                    conn.hop_docker(container)?;
+                    conn.hop_docker(container.as_str(&string_pool))?;
                 }
                 Part::Bash {} => {}
             }
