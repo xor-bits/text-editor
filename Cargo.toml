@@ -16,6 +16,11 @@ rexpect = "0.6.0"
 ropey = "1.6.1"
 # rand = "0.9.1"
 # unicode-segmentation = "1.12.0"
+flate2 = "1.1.1"
+fastnbt = { git = "https://github.com/xor-bits/fastnbt" }
+fastsnbt = { git = "https://github.com/xor-bits/fastnbt" }
+# serde_json = "1.0.140"
+ron = "0.10.1"
 
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

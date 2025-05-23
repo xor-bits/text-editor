@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     fs,
-    io::{self, BufWriter, Seek, Write},
+    io::{self, BufWriter, Read, Seek, Write},
     ops::Range,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
@@ -105,9 +105,10 @@ pub struct Buffer {
     pub syntax: Option<Syntax>,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum ContentTransform {
     Utf8,
-    // Hex,
+    Hex,
     Nbt,
 }
 
@@ -155,17 +156,19 @@ impl Buffer {
         let name = name.to_string().into();
 
         let mut conn = CONN_POOL.connect(parts)?;
-        let file = conn.read_file(path)?;
+        let mut file = conn.read_file(path)?;
 
-        let contents = Rope::from_reader(file)?;
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)?;
+
         let remote = conn.remote();
         CONN_POOL.recycle(conn);
 
-        let syntax = Syntax::try_from_ext(path, contents.slice(..));
+        let (contents, syntax, ty) = Self::read_from(&contents, path);
 
         Ok(Self {
             contents,
-            ty: ContentTransform::Utf8,
+            ty,
             name,
             inner: BufferInner::Remote {
                 remote,
@@ -188,13 +191,15 @@ impl Buffer {
         {
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
             Err(other) => bail!(other),
-            Ok(file) => {
-                let contents = Rope::from_reader(&file)?;
-                let syntax = Syntax::try_from_ext(path, contents.slice(..));
+            Ok(mut file) => {
+                let mut contents = Vec::new();
+                file.read_to_end(&mut contents)?;
+
+                let (contents, syntax, ty) = Self::read_from(&contents, path);
 
                 return Ok(Self {
                     contents,
-                    ty: ContentTransform::Utf8,
+                    ty,
                     name,
                     inner: BufferInner::File {
                         inner: file,
@@ -215,13 +220,15 @@ impl Buffer {
         {
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
             Err(other) => bail!(other),
-            Ok(file) => {
-                let contents = Rope::from_reader(&file)?;
-                let syntax = Syntax::try_from_ext(path, contents.slice(..));
+            Ok(mut file) => {
+                let mut contents = Vec::new();
+                file.read_to_end(&mut contents)?;
+
+                let (contents, syntax, ty) = Self::read_from(&contents, path);
 
                 return Ok(Self {
                     contents,
-                    ty: ContentTransform::Utf8,
+                    ty,
                     name,
                     inner: BufferInner::File {
                         inner: file,
@@ -233,18 +240,61 @@ impl Buffer {
             }
         };
 
-        let contents = Rope::new();
-        let syntax = Syntax::try_from_ext(path, contents.slice(..));
+        let (contents, syntax, ty) = Self::read_from(&[], path);
 
         // finally open it as a new file, without creating the file yet
         Ok(Self {
             contents,
-            ty: ContentTransform::Utf8,
+            ty,
             name,
             inner: BufferInner::NewFile { inner: path.into() },
             modified: false,
             syntax,
         })
+    }
+
+    fn read_from(contents: &[u8], path: &str) -> (Rope, Option<Syntax>, ContentTransform) {
+        if let Some(result) = Self::try_read_utf8(contents, path) {
+            return result;
+        }
+
+        if let Some(result) = Self::try_read_nbt(contents, path) {
+            return result;
+        }
+
+        todo!();
+    }
+
+    fn try_read_utf8(
+        contents: &[u8],
+        path: &str,
+    ) -> Option<(Rope, Option<Syntax>, ContentTransform)> {
+        let Ok(s) = std::str::from_utf8(contents) else {
+            return None;
+        };
+
+        let contents = Rope::from_str(s);
+        let syntax = Syntax::try_from_ext(path, contents.slice(..));
+
+        Some((contents, syntax, ContentTransform::Utf8))
+    }
+
+    fn try_read_nbt(
+        contents: &[u8],
+        _path: &str,
+    ) -> Option<(Rope, Option<Syntax>, ContentTransform)> {
+        let decoder = flate2::bufread::GzDecoder::new(contents);
+        let header = decoder.header()?;
+        tracing::debug!("header = {header:?}");
+
+        let Ok(val) = fastnbt::from_reader::<_, fastnbt::Value>(decoder) else {
+            return None;
+        };
+        let contents = fastsnbt::to_string_pretty(&val).expect("failed to recode NBT to json");
+        let contents = Rope::from_str(&contents);
+        let syntax = Syntax::try_from_ext(".json", contents.slice(..));
+
+        Some((contents, syntax, ContentTransform::Nbt))
     }
 
     pub fn write(&mut self) -> Result<()> {
@@ -257,7 +307,7 @@ impl Buffer {
                     bail!("readonly");
                 }
 
-                Self::write_to_file(&self.contents, &mut self.modified, inner)?;
+                Self::write_to_file(&self.contents, self.ty, &mut self.modified, inner)?;
             }
             BufferInner::NewFile { ref inner } => {
                 let mut new_file = fs::OpenOptions::new()
@@ -265,7 +315,7 @@ impl Buffer {
                     .create_new(true)
                     .open(inner)?;
 
-                Self::write_to_file(&self.contents, &mut self.modified, &mut new_file)?;
+                Self::write_to_file(&self.contents, self.ty, &mut self.modified, &mut new_file)?;
 
                 self.inner = BufferInner::File {
                     inner: new_file,
@@ -285,7 +335,7 @@ impl Buffer {
                 let mut conn = CONN_POOL.connect_to(remote.clone())?;
                 let writer = conn.write_file(filename)?;
 
-                Self::write_to(&self.contents, &mut self.modified, writer)?;
+                Self::write_to(&self.contents, self.ty, &mut self.modified, writer)?;
 
                 conn.finish_write_file(filename)?;
                 CONN_POOL.recycle(conn);
@@ -303,17 +353,69 @@ impl Buffer {
         Ok(())
     }
 
-    fn write_to_file(contents: &Rope, modified: &mut bool, output: &mut fs::File) -> Result<()> {
+    fn write_to_file(
+        contents: &Rope,
+        ty: ContentTransform,
+        modified: &mut bool,
+        output: &mut fs::File,
+    ) -> Result<()> {
         output.seek(io::SeekFrom::Start(0))?;
         output.set_len(contents.len_bytes() as u64)?;
 
-        Self::write_to(contents, modified, output)?;
+        Self::write_to(contents, ty, modified, output)?;
 
         Ok(())
     }
 
-    fn write_to(contents: &Rope, modified: &mut bool, output: impl Write) -> Result<()> {
-        contents.write_to(BufWriter::new(output))?;
+    fn write_to(
+        contents: &Rope,
+        ty: ContentTransform,
+        modified: &mut bool,
+        output: impl Write,
+    ) -> Result<()> {
+        match ty {
+            ContentTransform::Utf8 => {
+                contents.write_to(BufWriter::new(output))?;
+            }
+            ContentTransform::Hex => {}
+            ContentTransform::Nbt => {
+                /* struct RopeReader<'a> {
+                    chunks: ropey::iter::Chunks<'a>,
+                    left: &'a [u8],
+                }
+
+                impl io::Read for RopeReader<'_> {
+                    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                        if self.left.is_empty() {
+                            let Some(chunk) = self.chunks.next() else {
+                                return Ok(0);
+                            };
+                            self.left = chunk.as_bytes();
+                        }
+
+                        let len = buf.len().min(self.left.len());
+                        let (copying, now_left) = self.left.split_at(len);
+                        buf[0..len].copy_from_slice(copying);
+                        self.left = now_left;
+                        Ok(len)
+                    }
+                }
+
+                let mut reader = RopeReader {
+                    chunks: contents.chunks(),
+                    left: &[],
+                }; */
+
+                let contents = contents.to_string(); // TODO: implement Read for fastsnbt
+
+                let encoder = flate2::GzBuilder::new()
+                    .write(BufWriter::new(output), flate2::Compression::best());
+
+                let val: fastnbt::Value = fastsnbt::from_str(&contents)?;
+                fastnbt::to_writer(encoder, &val)?;
+            }
+        }
+
         *modified = false;
 
         Ok(())

@@ -358,14 +358,6 @@ impl Widget for BufferWidget<'_> {
         // let last_byte = len - 1;
 
         'lines: for y in 0..area.height as usize {
-            // for x in 0..area.width as usize {
-            //     buf[(area.x + x as u16, area.y + y as u16)]
-            //         .set_char('x')
-            //         .set_fg(Color::Indexed(((x + y * area.width as usize) & 255) as u8))
-            //         .set_bg(theme::BACKGROUND);
-            // }
-            // continue;
-
             let Ok(start_byte) = self.buffer.contents.try_line_to_byte(self.line + y) else {
                 break;
             };
@@ -394,10 +386,10 @@ impl Widget for BufferWidget<'_> {
                         continue;
                     }
 
-                    if byte_offs + chunk_byte_idx >= buf.area.width as usize {
+                    if area.x as usize + byte_offs + chunk_byte_idx >= buf.area.width as usize {
                         continue 'lines;
                     }
-                    if y >= buf.area.height as usize {
+                    if area.y as usize + y >= buf.area.height as usize {
                         break 'lines;
                     }
 
