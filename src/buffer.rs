@@ -4,7 +4,7 @@ use std::{
     io::{self, BufWriter, Read, Seek, Write},
     ops::Range,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
+    sync::{mpsc::Sender, Arc, LazyLock},
 };
 
 use eyre::{bail, Result};
@@ -147,16 +147,21 @@ impl Buffer {
         }
     }
 
-    pub fn open(path: &str) -> Result<Self> {
+    pub fn open(path: &str, askpw_tx: Sender<(String, Sender<String>)>) -> Result<Self> {
         if let Some((parts, file)) = path.rsplit_once(':') {
-            Ok(Self::open_remote(parts, file, path)?)
+            Ok(Self::open_remote(parts, file, path, askpw_tx)?)
         } else {
             Ok(Self::open_local(path)?)
         }
     }
 
-    pub fn open_remote(parts: &str, path: &str, name: &str) -> Result<Self> {
-        let mut conn = CONN_POOL.connect(parts)?;
+    pub fn open_remote(
+        parts: &str,
+        path: &str,
+        name: &str,
+        askpw_tx: Sender<(String, Sender<String>)>,
+    ) -> Result<Self> {
+        let mut conn = CONN_POOL.connect(parts, askpw_tx)?;
         let res = Self::open_remote_with(&mut conn, path, name);
         CONN_POOL.recycle(conn);
         res
@@ -420,7 +425,7 @@ impl Buffer {
         (contents, syntax, ContentTransform::Hex)
     }
 
-    pub fn write(&mut self) -> Result<()> {
+    pub fn write(&mut self, askpw_tx: Sender<(String, Sender<String>)>) -> Result<()> {
         match self.inner {
             BufferInner::File {
                 ref mut inner,
@@ -455,7 +460,7 @@ impl Buffer {
 
                 let (_, filename) = self.name.rsplit_once(':').unwrap();
 
-                let mut conn = CONN_POOL.connect_to(remote.clone())?;
+                let mut conn = CONN_POOL.connect_to(remote.clone(), askpw_tx)?;
                 let writer = conn.write_file(filename)?;
 
                 Self::write_to(&self.contents, self.ty, &mut self.modified, writer)?;

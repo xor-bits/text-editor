@@ -5,11 +5,12 @@ use std::{
     fmt,
     io::{self, Cursor, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
+    sync::{
+        mpsc::{channel, Sender},
+        Arc, Mutex, RwLock,
+    },
     time::Instant,
 };
-
-use crate::buffer::CONN_POOL;
 
 //
 
@@ -29,10 +30,10 @@ impl Part {
         for part in parts {
             match part {
                 Part::Ssh { destination, port } => {
-                    _ = write!(&mut buf, "ssh:{}:{port}:", destination.as_str(&pool),);
+                    _ = write!(&mut buf, "ssh:{}:{port}:", destination.as_str(pool),);
                 }
                 Part::Docker { container } => {
-                    _ = write!(&mut buf, "ssh:{}:", container.as_str(&pool),);
+                    _ = write!(&mut buf, "ssh:{}:", container.as_str(pool),);
                 }
                 Part::Sudo {} => {
                     _ = write!(&mut buf, "sudo:");
@@ -125,6 +126,7 @@ impl Connection {
         &mut self,
         pool: &str,
         nth_hop: usize,
+        askpw_tx: Sender<(String, Sender<String>)>,
         destination: &str,
         port: u16,
     ) -> Result<()> {
@@ -132,6 +134,7 @@ impl Connection {
         self.run_cmd_askpw_checked(Regex::new("[a-z][-a-z0-9_]*\\$?@(([a-zA-Z]|[a-zA-Z][a-zA-Z0-9\\-]*[a-zA-Z0-9])\\.)*([A-Za-z]|[A-Za-z][A-Za-z0-9\\-]*[A-Za-z0-9])'s password:").unwrap(),
             pool,
             nth_hop,
+            askpw_tx,
             format_args!(
             "ssh -p {port} -t -t '{destination}' env PS1=__sh_prompt TERM=dumb sh"
         ),)?;
@@ -139,12 +142,18 @@ impl Connection {
     }
 
     /// elevate privileges
-    pub fn hop_sudo(&mut self, pool: &str, nth_hop: usize) -> Result<()> {
+    pub fn hop_sudo(
+        &mut self,
+        pool: &str,
+        nth_hop: usize,
+        askpw_tx: Sender<(String, Sender<String>)>,
+    ) -> Result<()> {
         // FIXME: sanitation
         self.run_cmd_askpw_checked(
             Regex::new("__sh_pw_prompt").unwrap(),
             pool,
             nth_hop,
+            askpw_tx,
             format_args!("sudo -S -p '__sh_pw_prompt' env PS1=__sh_prompt TERM=dumb sh"),
         )?;
         Ok(())
@@ -189,18 +198,34 @@ impl Connection {
         askpw_needle: Regex,
         pool: &str,
         nth_hop: usize,
+        askpw_tx: Sender<(String, Sender<String>)>,
         cmd: fmt::Arguments,
     ) -> Result<String> {
         let now = Instant::now();
         self.run_cmd(cmd)?;
-        let (result, askpw) = self.wait(Some(askpw_needle))?;
 
-        if let Some(askpw) = askpw {
-            let parts = &self.remote[..=nth_hop];
-            let dst = Part::print(pool, parts, " ");
+        let mut result = None;
 
-            todo!("got askpw '{askpw}' for '{dst}'");
+        for _ in 0..3 {
+            let (_result, askpw) = self.wait(Some(askpw_needle.clone()))?;
+            result.get_or_insert(_result);
+            if let Some(askpw) = askpw {
+                let parts = &self.remote[..=nth_hop];
+                let dst = Part::print(pool, parts, " ");
+                tracing::debug!("got askpw '{askpw}' for '{dst}'");
+
+                let (tx, rx) = channel();
+                askpw_tx.send((dst, tx))?;
+                let pw = rx.recv()?;
+
+                self.shell.writer.write_fmt(format_args!("{pw}\n"))?;
+                self.shell.writer.flush()?;
+            } else {
+                break;
+            }
         }
+
+        let result = result.unwrap();
 
         self.run_cmd(format_args!("echo $?"))?;
         let (exit_code, _) = self.wait(None)?;
@@ -366,7 +391,11 @@ impl ConnectionPool {
         Part::print(&string_pool, remote, path)
     }
 
-    pub fn connect(&self, remote: &str) -> Result<Connection> {
+    pub fn connect(
+        &self,
+        remote: &str,
+        askpw_tx: Sender<(String, Sender<String>)>,
+    ) -> Result<Connection> {
         let mut string_pool = self
             .string_pool
             .write()
@@ -379,10 +408,14 @@ impl ConnectionPool {
 
         drop(string_pool);
 
-        self.connect_to(remote)
+        self.connect_to(remote, askpw_tx)
     }
 
-    pub fn connect_to(&self, remote: Arc<[Part]>) -> Result<Connection> {
+    pub fn connect_to(
+        &self,
+        remote: Arc<[Part]>,
+        askpw_tx: Sender<(String, Sender<String>)>,
+    ) -> Result<Connection> {
         let mut connections = self
             .connections
             .lock()
@@ -412,12 +445,13 @@ impl ConnectionPool {
                     conn.hop_ssh(
                         &string_pool,
                         nth_hop,
+                        askpw_tx.clone(),
                         destination.as_str(&string_pool),
                         *port,
                     )?;
                 }
                 Part::Sudo {} => {
-                    conn.hop_sudo(&string_pool, nth_hop)?;
+                    conn.hop_sudo(&string_pool, nth_hop, askpw_tx.clone())?;
                 }
                 Part::Docker { container } => {
                     conn.hop_docker(container.as_str(&string_pool))?;

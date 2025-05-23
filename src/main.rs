@@ -25,15 +25,12 @@ fn main() -> Result<()> {
     logger_init()?;
     let args: Args = Args::parse();
 
-    let buffer = args
-        .file
-        .map(|filename| Buffer::open(filename.as_str()))
-        .unwrap_or_else(|| Ok(Buffer::new_welcome()))
-        .expect("FIXME: failed to open a file");
-
     let (_guard, terminal) = AlternativeScreenGuard::enter();
 
-    let mut editor = Editor::new(buffer);
+    let mut editor = Editor::new(Buffer::new_welcome());
+    if let Some(path) = args.file {
+        editor.open(path);
+    }
     editor.run(terminal);
 
     Ok(())

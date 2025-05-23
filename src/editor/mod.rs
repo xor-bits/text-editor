@@ -1,4 +1,12 @@
-use std::{borrow::Cow, mem};
+use std::{
+    borrow::Cow,
+    mem,
+    sync::mpsc::{channel, Receiver, Sender},
+    thread,
+    time::Duration,
+};
+
+use color_eyre::Result;
 
 use crossterm::{
     cursor::SetCursorStyle,
@@ -41,6 +49,10 @@ pub struct Editor {
 
     pub buffers: Vec<Buffer>,
     pub view: BufferView,
+    pub open_askpw_rx: Receiver<(String, Sender<String>)>,
+    pub open_askpw_tx: Sender<(String, Sender<String>)>,
+    pub open_buffer_rx: Receiver<Result<Buffer>>,
+    pub open_buffer_tx: Sender<Result<Buffer>>,
 
     pub popup: Popup,
 
@@ -59,6 +71,9 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(buffer: Buffer) -> Self {
+        let (open_askpw_tx, open_askpw_rx) = channel();
+        let (open_buffer_tx, open_buffer_rx) = channel();
+
         Self {
             should_close: false,
             size: terminal::size().unwrap(),
@@ -66,6 +81,10 @@ impl Editor {
 
             buffers: vec![buffer],
             view: BufferView::new(0),
+            open_askpw_rx,
+            open_askpw_tx,
+            open_buffer_rx,
+            open_buffer_tx,
 
             popup: <_>::default(),
 
@@ -84,7 +103,7 @@ impl Editor {
     }
 
     pub fn run(&mut self, mut terminal: DefaultTerminal) {
-        loop {
+        'main: loop {
             let area = terminal
                 .draw(|frame| {
                     self.render(frame);
@@ -114,6 +133,11 @@ impl Editor {
                 terminal.hide_cursor().unwrap();
             }
 
+            while !event::poll(Duration::from_millis(1)).unwrap() {
+                if self.update() {
+                    continue 'main;
+                }
+            }
             self.event(event::read().unwrap());
 
             if self.should_close {
@@ -366,6 +390,40 @@ impl Editor {
         }
     }
 
+    pub fn update(&mut self) -> bool {
+        let mut updated = false;
+
+        if let Ok((path, sender)) = self.open_askpw_rx.try_recv() {
+            updated = true;
+            let prev = Box::new(std::mem::take(&mut self.popup));
+            self.popup = Popup::Askpw {
+                path,
+                password: String::new(),
+                sender,
+                prev,
+            };
+        }
+
+        if let Ok(result) = self.open_buffer_rx.try_recv() {
+            updated = true;
+            match result {
+                Ok(buf) => self.open_from(buf),
+                Err(err) => {
+                    self.status.clear();
+                    use std::fmt::Write;
+                    _ = write!(&mut self.status, "failed to open: {err}");
+                    self.status_is_error = true;
+                }
+            }
+        }
+
+        // if updated {
+        //     tracing::warn!("update");
+        // }
+
+        updated
+    }
+
     pub fn current(&self) -> BufferViewRef<'_> {
         BufferViewRef::new(&self.view, &self.buffers)
     }
@@ -389,16 +447,20 @@ impl Editor {
         self.view = BufferView::new(i);
     }
 
-    pub fn open(&mut self, path: &str) {
-        if let Some(i) = self.find_opened(path) {
+    pub fn open(&mut self, path: String) {
+        if let Some(i) = self.find_opened(&path) {
             self.switch_to(i);
             return;
         }
 
-        match Buffer::open(path) {
-            Ok(buf) => self.open_from(buf),
-            Err(err) => tracing::error!("failed to open `{path}`: {err}"),
-        }
+        let askpw_tx = self.open_askpw_tx.clone();
+        let buffer_tx = self.open_buffer_tx.clone();
+
+        thread::spawn(move || {
+            if let Err(err) = buffer_tx.send(Buffer::open(&path, askpw_tx)) {
+                tracing::error!("failed to send back opened buffer: {err}");
+            }
+        });
     }
 
     pub fn open_from(&mut self, buf: Buffer) {

@@ -884,7 +884,12 @@ impl Action for Write {
     }
 
     fn run(&self, editor: &mut Editor) {
-        if let Err(err) = editor.current_mut().buffer.write() {
+        if !editor.current().buffer.modified {
+            return;
+        }
+
+        let askpw_tx = editor.open_askpw_tx.clone();
+        if let Err(err) = editor.current_mut().buffer.write(askpw_tx) {
             editor.status_is_error = true;
             editor.status.clear();
             use std::fmt::Write;
@@ -913,7 +918,8 @@ impl Action for WriteQuit {
             return;
         }
 
-        if let Err(err) = editor.current_mut().buffer.write() {
+        let askpw_tx = editor.open_askpw_tx.clone();
+        if let Err(err) = editor.current_mut().buffer.write(askpw_tx) {
             editor.status_is_error = true;
             editor.status.clear();
             use std::fmt::Write;
@@ -940,7 +946,12 @@ impl Action for WriteQuitForce {
     }
 
     fn run(&self, editor: &mut Editor) {
-        if let Err(err) = editor.current_mut().buffer.write() {
+        if !editor.current().buffer.modified {
+            return;
+        }
+
+        let askpw_tx = editor.open_askpw_tx.clone();
+        if let Err(err) = editor.current_mut().buffer.write(askpw_tx) {
             editor.status_is_error = true;
             editor.status.clear();
             use std::fmt::Write;
@@ -1099,15 +1110,7 @@ impl Action for Open {
             return;
         };
 
-        if let Some(i) = editor.find_opened(path) {
-            editor.switch_to(i);
-            return;
-        }
-
-        match Buffer::open(path) {
-            Ok(buf) => editor.open_from(buf),
-            Err(err) => tracing::error!("failed to open `{path}`: {err}"),
-        }
+        editor.open(path.to_string());
     }
 }
 
@@ -1222,7 +1225,7 @@ impl Action for FileExplorer {
             BufferInner::Scratch { .. } => (env::current_dir().unwrap(), None),
         };
 
-        match Popup::file_explorer(remote, at) {
+        match Popup::file_explorer(remote, editor.open_askpw_tx.clone(), at) {
             Ok(popup) => {
                 editor.popup = popup;
             }

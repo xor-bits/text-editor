@@ -1,4 +1,9 @@
-use std::{borrow::Cow, fs, path::PathBuf, sync::Arc};
+use std::{
+    borrow::Cow,
+    fs,
+    path::PathBuf,
+    sync::{mpsc::Sender, Arc},
+};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use eyre::Result;
@@ -30,16 +35,29 @@ pub enum Popup {
     BufferPicker {
         selected: usize,
     },
+    Askpw {
+        path: String,
+        password: String,
+        sender: Sender<String>,
+        prev: Box<Popup>,
+    },
+    // Error {
+    //     prev: Box<Popup>,
+    // },
     #[default]
     None,
 }
 
 impl Popup {
-    pub fn file_explorer(remote: Option<Arc<[Part]>>, mut cwd: PathBuf) -> Result<Self> {
+    pub fn file_explorer(
+        remote: Option<Arc<[Part]>>,
+        askpw_tx: Sender<(String, Sender<String>)>,
+        mut cwd: PathBuf,
+    ) -> Result<Self> {
         let mut files: Vec<(Cow<'static, str>, bool)>;
 
         if let Some(remote) = remote.clone() {
-            let mut conn = CONN_POOL.connect_to(remote)?;
+            let mut conn = CONN_POOL.connect_to(remote, askpw_tx)?;
             cwd = conn.canonicalize(&cwd)?;
             let read_dir = conn.list_files(&cwd)?;
 
@@ -195,17 +213,51 @@ impl Popup {
                     frame.render_widget(entry, area);
                 }
             }
+            Popup::Askpw { path, password, .. } => {
+                let w = (path.len() + 15).min(u16::MAX as usize) as u16;
+                let h = 3;
+
+                let [_, area, _] = Layout::vertical([
+                    Constraint::Fill(1),
+                    Constraint::Length(w),
+                    Constraint::Fill(1),
+                ])
+                .areas(area);
+
+                let [_, area, _] = Layout::vertical([
+                    Constraint::Fill(1),
+                    Constraint::Length(h),
+                    Constraint::Fill(1),
+                ])
+                .areas(area);
+
+                let block = Block::bordered()
+                    .title(Line::from_iter(["Password for"]).left_aligned())
+                    .title(Line::from_iter([" ", path]).right_aligned())
+                    .style(Style::new().bg(theme::BACKGROUND));
+
+                frame.render_widget(Clear, area);
+                frame.render_widget(block, area);
+
+                let area = area.inner(Margin {
+                    horizontal: 1,
+                    vertical: 1,
+                });
+
+                let entry = Line::from_iter(["*".repeat(password.len())]);
+                frame.render_widget(entry, area);
+            }
             Popup::None => {}
         }
     }
 
     pub fn event(mut self, editor: &mut Editor, event: &Event) -> Self {
-        match &mut self {
+        match self {
             Popup::FileExplorer {
-                cwd,
-                selected,
-                remote,
-                files,
+                ref mut cwd,
+                ref mut selected,
+                ref remote,
+                ref files,
             } => match event {
                 Event::Key(KeyEvent {
                     code: KeyCode::Esc,
@@ -234,7 +286,11 @@ impl Popup {
                     ..
                 }) => {
                     cwd.pop();
-                    match Popup::file_explorer(remote.clone(), cwd.clone()) {
+                    match Popup::file_explorer(
+                        remote.clone(),
+                        editor.open_askpw_tx.clone(),
+                        cwd.clone(),
+                    ) {
                         Ok(v) => v,
                         Err(err) => {
                             tracing::error!("failed to travel directories: {err}");
@@ -253,7 +309,11 @@ impl Popup {
 
                     cwd.push(filename.as_ref());
                     if *is_dir {
-                        match Popup::file_explorer(remote.clone(), cwd.clone()) {
+                        match Popup::file_explorer(
+                            remote.clone(),
+                            editor.open_askpw_tx.clone(),
+                            cwd.clone(),
+                        ) {
                             Ok(v) => v,
                             Err(err) => {
                                 tracing::error!("failed to travel directories: {err}");
@@ -263,11 +323,13 @@ impl Popup {
                     } else {
                         match cwd.as_os_str().to_str() {
                             Some(path) => {
-                                if let Some(remote) = remote {
-                                    editor.open(&CONN_POOL.path_of(remote, path));
+                                let path = if let Some(remote) = remote.clone() {
+                                    CONN_POOL.path_of(&remote, path)
                                 } else {
-                                    editor.open(path);
-                                }
+                                    path.to_string()
+                                };
+
+                                editor.open(path);
                                 Popup::None
                             }
                             None => {
@@ -279,7 +341,7 @@ impl Popup {
                 }
                 _ => self,
             },
-            Popup::BufferPicker { selected } => match event {
+            Popup::BufferPicker { ref mut selected } => match event {
                 Event::Key(KeyEvent {
                     code: KeyCode::Up,
                     kind: KeyEventKind::Press,
@@ -310,6 +372,60 @@ impl Popup {
                     Popup::None
                 }
                 _ => self,
+            },
+            Popup::Askpw {
+                mut password,
+                sender,
+                prev,
+                path,
+            } => match event {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Esc,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => Popup::None,
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char(ch),
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    password.push(*ch);
+
+                    Popup::Askpw {
+                        password,
+                        sender,
+                        prev,
+                        path,
+                    }
+                }
+                Event::Key(KeyEvent {
+                    code: KeyCode::Backspace,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    password.pop();
+
+                    Popup::Askpw {
+                        password,
+                        sender,
+                        prev,
+                        path,
+                    }
+                }
+                Event::Key(KeyEvent {
+                    code: KeyCode::Enter,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    _ = sender.send(password);
+                    *prev
+                }
+                _ => Popup::Askpw {
+                    password,
+                    sender,
+                    prev,
+                    path,
+                },
             },
             Popup::None => self,
         }
