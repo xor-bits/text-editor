@@ -9,6 +9,8 @@ use std::{
     time::Instant,
 };
 
+use crate::buffer::CONN_POOL;
+
 //
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,6 +22,32 @@ pub enum Part {
 }
 
 impl Part {
+    pub fn print(pool: &str, parts: &[Self], path: &str) -> String {
+        let mut buf = String::new();
+        use std::fmt::Write;
+
+        for part in parts {
+            match part {
+                Part::Ssh { destination, port } => {
+                    _ = write!(&mut buf, "ssh:{}:{port}:", destination.as_str(&pool),);
+                }
+                Part::Docker { container } => {
+                    _ = write!(&mut buf, "ssh:{}:", container.as_str(&pool),);
+                }
+                Part::Sudo {} => {
+                    _ = write!(&mut buf, "sudo:");
+                }
+                Part::Bash {} => {
+                    _ = write!(&mut buf, "bash:");
+                }
+            }
+        }
+
+        buf.push_str(path);
+
+        buf
+    }
+
     pub fn parse(pool: &mut String, s: &str) -> Result<Self> {
         let mut args = s.split(':');
         let proto_id = args.next().unwrap_or(s);
@@ -93,19 +121,30 @@ pub struct Connection {
 
 impl Connection {
     /// jump over ssh
-    pub fn hop_ssh(&mut self, destination: &str, port: u16) -> Result<()> {
+    pub fn hop_ssh(
+        &mut self,
+        pool: &str,
+        nth_hop: usize,
+        destination: &str,
+        port: u16,
+    ) -> Result<()> {
         // FIXME: sanitation
-        self.run_cmd_askpw_checked(Regex::new("[a-z][-a-z0-9_]*\\$?@(([a-zA-Z]|[a-zA-Z][a-zA-Z0-9\\-]*[a-zA-Z0-9])\\.)*([A-Za-z]|[A-Za-z][A-Za-z0-9\\-]*[A-Za-z0-9])'s password:").unwrap(), format_args!(
+        self.run_cmd_askpw_checked(Regex::new("[a-z][-a-z0-9_]*\\$?@(([a-zA-Z]|[a-zA-Z][a-zA-Z0-9\\-]*[a-zA-Z0-9])\\.)*([A-Za-z]|[A-Za-z][A-Za-z0-9\\-]*[A-Za-z0-9])'s password:").unwrap(),
+            pool,
+            nth_hop,
+            format_args!(
             "ssh -p {port} -t -t '{destination}' env PS1=__sh_prompt TERM=dumb sh"
-        ))?;
+        ),)?;
         Ok(())
     }
 
     /// elevate privileges
-    pub fn hop_sudo(&mut self) -> Result<()> {
+    pub fn hop_sudo(&mut self, pool: &str, nth_hop: usize) -> Result<()> {
         // FIXME: sanitation
         self.run_cmd_askpw_checked(
             Regex::new("__sh_pw_prompt").unwrap(),
+            pool,
+            nth_hop,
             format_args!("sudo -S -p '__sh_pw_prompt' env PS1=__sh_prompt TERM=dumb sh"),
         )?;
         Ok(())
@@ -148,6 +187,8 @@ impl Connection {
     pub fn run_cmd_askpw_checked(
         &mut self,
         askpw_needle: Regex,
+        pool: &str,
+        nth_hop: usize,
         cmd: fmt::Arguments,
     ) -> Result<String> {
         let now = Instant::now();
@@ -155,7 +196,10 @@ impl Connection {
         let (result, askpw) = self.wait(Some(askpw_needle))?;
 
         if let Some(askpw) = askpw {
-            todo!("got askpw '{askpw}'");
+            let parts = &self.remote[..=nth_hop];
+            let dst = Part::print(pool, parts, " ");
+
+            todo!("got askpw '{askpw}' for '{dst}'");
         }
 
         self.run_cmd(format_args!("echo $?"))?;
@@ -319,29 +363,7 @@ impl ConnectionPool {
             .read()
             .unwrap_or_else(|err| err.into_inner());
 
-        let mut buf = String::new();
-        use std::fmt::Write;
-
-        for part in remote {
-            match part {
-                Part::Ssh { destination, port } => {
-                    _ = write!(&mut buf, "ssh:{}:{port}:", destination.as_str(&string_pool),);
-                }
-                Part::Docker { container } => {
-                    _ = write!(&mut buf, "ssh:{}:", container.as_str(&string_pool),);
-                }
-                Part::Sudo {} => {
-                    _ = write!(&mut buf, "sudo:");
-                }
-                Part::Bash {} => {
-                    _ = write!(&mut buf, "bash:");
-                }
-            }
-        }
-
-        buf.push_str(path);
-
-        buf
+        Part::print(&string_pool, remote, path)
     }
 
     pub fn connect(&self, remote: &str) -> Result<Connection> {
@@ -382,15 +404,20 @@ impl ConnectionPool {
             .read()
             .unwrap_or_else(|err| err.into_inner());
 
-        for part in conn.remote.clone().iter() {
+        for (nth_hop, part) in conn.remote.clone().iter().enumerate() {
             tracing::trace!("hop: {part:?}");
 
             match part {
                 Part::Ssh { destination, port } => {
-                    conn.hop_ssh(destination.as_str(&string_pool), *port)?;
+                    conn.hop_ssh(
+                        &string_pool,
+                        nth_hop,
+                        destination.as_str(&string_pool),
+                        *port,
+                    )?;
                 }
                 Part::Sudo {} => {
-                    conn.hop_sudo()?;
+                    conn.hop_sudo(&string_pool, nth_hop)?;
                 }
                 Part::Docker { container } => {
                     conn.hop_docker(container.as_str(&string_pool))?;
