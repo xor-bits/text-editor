@@ -44,7 +44,7 @@ text-editor ssh:user1@host1|ssh:user2@host2:file
 
  - [x] file editing
  - [x] remote (ssh/sudo/docker/..) file editing
- - [ ] SSH/sudo askpass somehow
+ - [x] SSH/sudo askpass somehow
  - [x] multiple buffers
  - [x] file picker
  - [x] buffer picker
