@@ -593,12 +593,13 @@ impl Buffer {
 
     /// delete range `cursor` and replace it with `text`
     pub fn replace_text_at(&mut self, mut cursor: Range<usize>, text: &str) {
-        if cursor.start >= self.contents.len_chars() {
+        if cursor.start > self.contents.len_chars() {
+            cursor.start = self.contents.len_chars();
             tracing::warn!("replace_text_at cursor.start out of bounds");
             return;
         }
-        if cursor.end >= self.contents.len_chars() {
-            cursor.end = self.contents.len_chars() - 1;
+        if cursor.end > self.contents.len_chars() {
+            cursor.end = self.contents.len_chars();
             tracing::warn!("replace_text_at cursor.end out of bounds");
             return;
         }
