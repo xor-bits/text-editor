@@ -262,7 +262,7 @@ impl Buffer {
             return result;
         }
 
-        todo!();
+        Self::read_hex(contents, path)
     }
 
     fn try_read_utf8(
@@ -295,6 +295,119 @@ impl Buffer {
         let syntax = Syntax::try_from_ext(".json", contents.slice(..));
 
         Some((contents, syntax, ContentTransform::Nbt))
+    }
+
+    fn read_hex(contents: &[u8], _path: &str) -> (Rope, Option<Syntax>, ContentTransform) {
+        struct HexReader<'a> {
+            contents: &'a [u8],
+            col: usize,
+            state: Option<u8>,
+        }
+
+        enum Control {
+            First,
+            Second,
+            Space,
+            Next,
+        }
+
+        #[rustfmt::skip]
+        const FORMAT: &[Control] = &[
+            Control::First, Control::Second, Control::Space,
+            Control::First, Control::Second, Control::Space,
+            Control::First, Control::Second, Control::Space,
+            Control::First, Control::Second, Control::Space,
+            Control::First, Control::Second, Control::Space,
+            Control::First, Control::Second, Control::Space,
+            Control::First, Control::Second, Control::Space,
+            Control::First, Control::Second, Control::Space,
+
+            Control::Space,
+
+            Control::Space, Control::First, Control::Second,
+            Control::Space, Control::First, Control::Second,
+            Control::Space, Control::First, Control::Second,
+            Control::Space, Control::First, Control::Second,
+            Control::Space, Control::First, Control::Second,
+            Control::Space, Control::First, Control::Second,
+            Control::Space, Control::First, Control::Second,
+            Control::Space, Control::First, Control::Second,
+
+            Control::Next,
+        ];
+
+        impl HexReader<'_> {
+            fn get(&mut self) -> Option<u8> {
+                if let Some(cur) = self.state {
+                    return Some(cur);
+                }
+                let (byte, left) = self.contents.split_first()?;
+                self.contents = left;
+                self.state = Some(*byte);
+                self.state
+            }
+
+            fn advance(&mut self) {
+                self.state = None;
+            }
+
+            fn hex_to_ascii(hex: u8) -> u8 {
+                if hex < 10 {
+                    b'0' + hex
+                } else if hex < 16 {
+                    b'a' + hex - 10
+                } else {
+                    unreachable!()
+                }
+            }
+        }
+
+        impl std::io::Read for HexReader<'_> {
+            fn read(&mut self, mut buf: &mut [u8]) -> io::Result<usize> {
+                let mut n = 0;
+                while let Some((outb, buf_next)) = buf.split_first_mut() {
+                    buf = buf_next;
+
+                    let Some(byte) = self.get() else {
+                        return Ok(n);
+                    };
+
+                    match FORMAT[self.col] {
+                        Control::First => {
+                            *outb = Self::hex_to_ascii((byte & 0xF0) >> 4);
+                            self.col += 1;
+                        }
+                        Control::Second => {
+                            *outb = Self::hex_to_ascii(byte & 0xF);
+                            self.col += 1;
+                            self.advance();
+                        }
+                        Control::Space => {
+                            *outb = b' ';
+                            self.col += 1;
+                        }
+                        Control::Next => {
+                            *outb = b'\n';
+                            self.col = 0;
+                        }
+                    }
+                    n += 1;
+                }
+
+                Ok(n)
+            }
+        }
+
+        let hex_reader = HexReader {
+            contents,
+            col: 0,
+            state: None,
+        };
+
+        let contents = Rope::from_reader(hex_reader).unwrap();
+        let syntax = Syntax::try_from_ext("", contents.slice(..));
+
+        (contents, syntax, ContentTransform::Hex)
     }
 
     pub fn write(&mut self) -> Result<()> {
@@ -360,7 +473,7 @@ impl Buffer {
         output: &mut fs::File,
     ) -> Result<()> {
         output.seek(io::SeekFrom::Start(0))?;
-        output.set_len(contents.len_bytes() as u64)?;
+        output.set_len(0)?;
 
         Self::write_to(contents, ty, modified, output)?;
 
@@ -371,13 +484,42 @@ impl Buffer {
         contents: &Rope,
         ty: ContentTransform,
         modified: &mut bool,
-        output: impl Write,
+        mut output: impl Write,
     ) -> Result<()> {
         match ty {
             ContentTransform::Utf8 => {
                 contents.write_to(BufWriter::new(output))?;
             }
-            ContentTransform::Hex => {}
+            ContentTransform::Hex => {
+                let mut buf = Vec::new();
+                let mut state = None;
+
+                for (i, ch) in contents.chars().enumerate() {
+                    if ch.is_whitespace() {
+                        continue;
+                    }
+
+                    let Some(hexdigit) = ch.to_digit(16) else {
+                        let row = contents.char_to_line(i);
+                        let col = i - contents.line_to_char(row);
+                        bail!("invalid token at {}:{}", row + 1, col + 1);
+                    };
+
+                    std::debug_assert!(hexdigit <= 15);
+                    let hexdigit = hexdigit as u8;
+
+                    if let Some(state) = state.take() {
+                        buf.push((state << 4) | hexdigit);
+                    } else {
+                        state = Some(hexdigit);
+                    }
+                }
+                if let Some(state) = state.take() {
+                    buf.push(state << 4);
+                }
+
+                output.write_all(&buf)?;
+            }
             ContentTransform::Nbt => {
                 /* struct RopeReader<'a> {
                     chunks: ropey::iter::Chunks<'a>,
